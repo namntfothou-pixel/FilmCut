@@ -17,10 +17,8 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from engine.ffmpeg import run_ffmpeg
-from engine.timeline import load_timeline, save_timeline
-from schemas.timeline import VideoClip, VideoTrack
-
-TOOLS = {"ping", "create_project", "get_project", "analyze_folder", "get_timeline", "create_timeline", "render_preview"}
+TOOLS = {"ping", "create_project", "get_project", "analyze_folder", "get_timeline", "create_timeline", "render_preview",
+         "add_clip", "remove_clip", "trim_clip", "move_clip", "set_clip_speed"}
 
 
 async def run_smoke_test(configuration=None):
@@ -72,10 +70,19 @@ async def run_smoke_test(configuration=None):
                 assert not created["data"]["created"]
                 await call("render_preview", {"project": "Smoke"}, success=False)
                 await call("ping")  # A project error has not terminated the process.
-                # Use existing timeline APIs to set up the render fixture; no new editing tool.
-                timeline = load_timeline(project)
-                timeline.video_tracks = [VideoTrack(id="video", clips=[VideoClip(id="clip", source=str(video), source_out=0.5)])]
-                save_timeline(project, timeline)
+                added = await call("add_clip", {"project": "Smoke", "source": str(video), "source_in": 0,
+                                                "source_out": 0.5, "position": 0})
+                clip_id = added["data"]["clip_id"]
+                assert Path(added["data"]["backup_path"]).is_file()
+                await call("trim_clip", {"project": "Smoke", "clip_id": clip_id, "source_in": 0.1, "source_out": 0.4})
+                await call("move_clip", {"project": "Smoke", "clip_id": clip_id, "position": 1})
+                await call("set_clip_speed", {"project": "Smoke", "clip_id": clip_id, "speed": 2})
+                await call("set_clip_speed", {"project": "Smoke", "clip_id": clip_id, "speed": 0}, success=False)
+                await call("set_clip_speed", {"project": "Smoke", "clip_id": clip_id, "speed": 1})
+                await call("move_clip", {"project": "Smoke", "clip_id": clip_id, "position": 0})
+                await call("trim_clip", {"project": "Smoke", "clip_id": clip_id, "source_in": 0, "source_out": 0.5})
+                await call("add_clip", {"project": "Smoke", "source": str(video), "source_in": 0,
+                                        "source_out": 0.5, "position": 0}, success=False)
                 before = (project / "timeline.json").read_bytes()
                 await call("create_timeline", {"project": "Smoke"})
                 assert (project / "timeline.json").read_bytes() == before
@@ -86,6 +93,9 @@ async def run_smoke_test(configuration=None):
                 assert data["metadata"]["audio_codec"] == "aac"
                 assert data["metadata"]["sample_rate"] == 48000
                 assert abs(data["metadata"]["duration"] - 0.5) < 0.07
+                await call("remove_clip", {"project": "Smoke", "clip_id": clip_id})
+                removed = await call("get_timeline", {"project": "Smoke"})
+                assert not removed["data"]["timeline"]["video_tracks"][0]["clips"]
                 # Missing timeline initialization is also tested independently.
                 (project / "timeline.json").unlink()
                 recreated = await call("create_timeline", {"project": "Smoke"})
@@ -94,7 +104,7 @@ async def run_smoke_test(configuration=None):
                 assert malformed.isError  # SDK argument validation error, process stays alive.
                 await call("ping")
                 return {"status": "PASS", "transport": "stdio", "tools": sorted(tools),
-                        "project_error_recovery": "PASS", "preview_render": "PASS"}
+                        "project_error_recovery": "PASS", "preview_render": "PASS", "timeline_editing": "PASS"}
 
 
 if __name__ == "__main__":

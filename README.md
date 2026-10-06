@@ -208,7 +208,7 @@ Failures expose stderr and exit status through structured errors.
 
 ## Local MCP server
 
-The official MCP Python SDK's FastMCP exposes exactly seven tools: `ping`,
+The official MCP Python SDK's FastMCP exposes the initial tools: `ping`,
 `create_project`, `get_project`, `analyze_folder`, `get_timeline`,
 `create_timeline`, and `render_preview`. Project arguments are project names
 within FilmCut's projects root. All tools return structured content with
@@ -222,7 +222,8 @@ per-file errors plus `complete=false` on a partial scan. `create_timeline` is
 idempotent: it preserves an existing valid timeline and only initializes a
 missing file. Invalid existing timelines return errors without being reset.
 `render_preview` uses the saved timeline and retains the current render limits.
-No new editing tools are added in this phase.
+Five non-destructive editing tools are also available: `add_clip`, `remove_clip`,
+`trim_clip`, `move_clip`, and `set_clip_speed`.
 
 Run the standalone official-SDK client test from the repository root:
 
@@ -231,7 +232,7 @@ Run the standalone official-SDK client test from the repository root:
 ```
 
 It launches a real server process, performs initialization and tool discovery,
-calls all seven tools, tests recovery after project and argument errors, and
+calls all twelve tools, tests recovery after project and argument errors, and
 renders synthetic media through MCP. Its temporary project storage is isolated
 using `FILMCUT_PROJECTS_ROOT`; real projects are untouched. On Linux use
 `.venv/bin/python scripts/mcp_smoke_test.py`.
@@ -265,3 +266,45 @@ The smoke test reads the actual `command`, `args`, `cwd`, and optional `env` fro
 the `filmcut` configuration and launches them. Only project storage is overridden
 to keep the test isolated. A `codex mcp get` result alone verifies registration,
 not a successful server connection. Restart the Codex session after configuration.
+
+## Non-destructive timeline editing
+
+All editing tools modify only `timeline.json`; they do not render or modify
+source/output media. `position` is a timestamp in seconds, matching
+`timeline_start`, not a clip index. Other clips keep their placements. Removal
+may leave a gap; longer trims or slower playback may create a prohibited overlap,
+in which case the edit is rejected without modifying the saved timeline.
+
+- `add_clip(project, source, source_in, source_out, position)` adds a video clip
+  with a generated ID. It uses the sole video track or creates one; multiple video
+  tracks are ambiguous because this API has no track argument.
+- `remove_clip(project, clip_id)` removes the matching video entry. A clip
+  referenced by a transition cannot be removed through this API.
+- `trim_clip(project, clip_id, source_in, source_out)` changes source trim times
+  while preserving the timeline start, volume, and speed.
+- `move_clip(project, clip_id, position)` changes the timeline start in seconds.
+- `set_clip_speed(project, clip_id, speed)` records finite, positive playback
+  speed, changing the computed duration while preserving other clip placements.
+
+Add and trim operations probe sources and require trim endpoints within known
+media duration. Every edit revalidates the entire timeline and saves atomically.
+Results include a concise summary, clip ID/state, timeline path, previous-version
+backup path, and revision identifier. Errors use the existing structured MCP
+envelope; failed edits do not create committed versions.
+
+Before every replacement, including direct `save_timeline` calls, the exact
+previous timeline bytes are written into `timeline_history/<UTC-time>-<UUID>.json`
+inside the project. Backup writes are flushed before installing the new timeline.
+The schema's `version=1` remains the format version; timestamped snapshots provide
+editing history. A backup failure prevents the edit. No backup is needed when
+creating a previously missing timeline. No automatic history pruning is performed.
+
+A project `.timeline.lock` serializes complete read/modify/save operations and
+direct saves. Concurrent requests receive `timeline_busy` and can retry. A crash
+may leave a stale lock; confirm no writer is running before removing it manually.
+Snapshots can be inspected or supplied to the existing validated save API to
+restore intent; no separate undo/restore MCP tool is added in this phase.
+
+Preview rendering still requires one contiguous track at speed 1. Editing gaps
+or speed changes is supported as intent; rendering those cases remains deferred.
+Music editing is not implemented.

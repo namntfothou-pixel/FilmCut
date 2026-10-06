@@ -9,7 +9,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from engine import media, render, timeline
-from services import project_service
+from services import project_service, timeline_service
 
 logger = logging.getLogger("filmcut.mcp")
 
@@ -117,6 +117,41 @@ def build_server(projects_root: Path | None = None) -> FastMCP:
         result = require_project(project)
         path = render.render_timeline(result.project_path)
         return _success({"preview_path": str(path), "metadata": media.probe_media(path)})
+
+    @server.tool(structured_output=True)
+    @_guard
+    def add_clip(project: str, source: str, source_in: float, source_out: float, position: float) -> dict[str, Any]:
+        """Add a video clip at position in seconds; preserve other positions."""
+        result = require_project(project)
+        return _success(timeline_service.add_clip(result.project_path, source, source_in, source_out, position))
+
+    @server.tool(structured_output=True)
+    @_guard
+    def remove_clip(project: str, clip_id: str) -> dict[str, Any]:
+        """Remove a video timeline entry without changing any media files."""
+        result = require_project(project)
+        return _success(timeline_service.remove_clip(result.project_path, clip_id))
+
+    @server.tool(structured_output=True)
+    @_guard
+    def trim_clip(project: str, clip_id: str, source_in: float, source_out: float) -> dict[str, Any]:
+        """Update source trim times; validate and back up before saving."""
+        result = require_project(project)
+        return _success(timeline_service.trim_clip(result.project_path, clip_id, source_in, source_out))
+
+    @server.tool(structured_output=True)
+    @_guard
+    def move_clip(project: str, clip_id: str, position: float) -> dict[str, Any]:
+        """Move a video clip to seconds; reject prohibited overlaps."""
+        result = require_project(project)
+        return _success(timeline_service.move_clip(result.project_path, clip_id, position))
+
+    @server.tool(structured_output=True)
+    @_guard
+    def set_clip_speed(project: str, clip_id: str, speed: float) -> dict[str, Any]:
+        """Set positive playback speed in timeline intent; do not render media."""
+        result = require_project(project)
+        return _success(timeline_service.set_clip_speed(result.project_path, clip_id, speed))
 
     return server
 

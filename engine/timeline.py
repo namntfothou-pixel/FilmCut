@@ -3,7 +3,10 @@
 import json
 import os
 import tempfile
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
+from uuid import uuid4
 
 from pydantic import ValidationError
 
@@ -109,19 +112,61 @@ def load_timeline(project: Project | str | Path) -> Timeline:
     return _validated(data, folder, metadata)
 
 
-def save_timeline(project: Project | str | Path, timeline: Timeline | dict) -> Path:
-    folder, metadata = _project_context(project)
+@contextmanager
+def timeline_lock(folder: Path):
+    """Serialize local writes and complete read/modify/write operations."""
+    lock = folder / ".timeline.lock"
+    try:
+        descriptor = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError as exc:
+        raise TimelineError("timeline_busy", "Another timeline write is in progress. Retry after it finishes; inspect a stale .timeline.lock before removing it.") from exc
+    except OSError as exc:
+        raise TimelineError("timeline_lock_failed", str(exc)) from exc
+    try:
+        os.close(descriptor)
+        yield
+    finally:
+        try:
+            lock.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise TimelineError("timeline_lock_cleanup_failed", f"Timeline lock could not be removed: {exc}") from exc
+
+
+def save_locked_timeline(folder: Path, metadata: Project, timeline: Timeline | dict) -> tuple[Path, Path | None]:
+    """Save under timeline_lock, backing up the exact previous JSON first."""
     parsed = _validated(timeline, folder, metadata)
     temporary = None
+    backup = None
     try:
+        destination = folder / "timeline.json"
+        if destination.exists():
+            history = folder / "timeline_history"
+            if history.is_symlink():
+                raise ValueError("timeline_history cannot be a symlink")
+            history.mkdir(exist_ok=True)
+            previous = destination.read_bytes()
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            backup = history / f"{stamp}-{uuid4().hex}.json"
+            with backup.open("xb") as handle:
+                handle.write(previous)
+                handle.flush()
+                os.fsync(handle.fileno())
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=folder,
                                          prefix=".timeline-", suffix=".tmp", delete=False) as handle:
             temporary = Path(handle.name)
             handle.write(parsed.model_dump_json(indent=2) + "\n")
-        destination = folder / "timeline.json"
+            handle.flush()
+            os.fsync(handle.fileno())
         temporary.replace(destination)
-        return destination
+        return destination, backup
     except (OSError, ValueError) as exc:
+        if backup is not None:
+            try:
+                backup.unlink(missing_ok=True)
+            except OSError:
+                pass
         raise TimelineError("timeline_write_failed", str(exc)) from exc
     finally:
         if temporary is not None:
@@ -129,3 +174,10 @@ def save_timeline(project: Project | str | Path, timeline: Timeline | dict) -> P
                 temporary.unlink(missing_ok=True)
             except OSError:
                 pass
+
+
+def save_timeline(project: Project | str | Path, timeline: Timeline | dict) -> Path:
+    """Validate, snapshot the previous timeline, then atomically replace it."""
+    folder, metadata = _project_context(project)
+    with timeline_lock(folder):
+        return save_locked_timeline(folder, metadata, timeline)[0]
