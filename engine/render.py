@@ -6,7 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from engine.ffmpeg import FFmpegError, concatenate_normalized, encoding_arguments, normalization_filter, run_ffmpeg
-from engine.audio import mix_music, resolve_music
+from engine.audio import mix_audio, resolve_music
 from engine.media import MediaError, probe_media
 from engine.timeline import TimelineError, _native_path, _project_context, load_timeline
 from schemas.timeline import VideoClip, VideoTrack
@@ -159,9 +159,9 @@ def render_timeline(project) -> Path:
         timeline = load_timeline(folder)
         if (timeline.width, timeline.height, timeline.fps) != (metadata.resolution.width, metadata.resolution.height, metadata.fps):
             raise RenderError("settings_mismatch", "Timeline resolution/FPS must match project.json.")
-        if any(clip.enabled for tracks in (timeline.audio_tracks, timeline.sfx_tracks)
+        if any(clip.enabled for tracks in (timeline.audio_tracks,)
                for track in tracks for clip in track.clips) or any(cue.enabled for track in timeline.subtitle_tracks for cue in track.cues):
-            raise RenderError("unsupported_tracks", "Separate dialogue tracks, SFX and subtitles are not rendered yet.")
+            raise RenderError("unsupported_tracks", "Separate dialogue tracks and subtitles are not rendered yet.")
         tracks = [track for track in timeline.video_tracks if any(clip.enabled for clip in track.clips)]
         if len(tracks) != 1:
             raise RenderError("unsupported_track_count", "Exactly one nonempty video track is required.")
@@ -176,16 +176,17 @@ def render_timeline(project) -> Path:
             if source.resolve() == destination.resolve():
                 raise RenderError("source_output_conflict", "Preview output cannot overwrite source media.")
         music = [item for track in timeline.music_tracks for item in track.clips]
-        for item in music:
+        sfx = [item for track in timeline.sfx_tracks for item in track.clips]
+        for item in [*music, *sfx]:
             if item.enabled and resolve_music(item, folder).resolve() == destination.resolve():
-                raise RenderError("source_output_conflict", "Preview output cannot overwrite music source media.")
+                raise RenderError("source_output_conflict", "Preview output cannot overwrite audio source media.")
         with tempfile.TemporaryDirectory(prefix="preview-", dir=cache) as workspace:
             workspace = Path(workspace)
             candidate = workspace / "preview.mp4"
             _render_track(folder, metadata, cache, tracks[0], candidate)
             duration = sum(clip.duration for clip in _active_clips(tracks[0]))
             mixed = workspace / "mixed.mp4"
-            if mix_music(candidate, music, folder, duration, workspace, mixed):
+            if mix_audio(candidate, music, sfx, folder, duration, workspace, mixed):
                 _verify(mixed, metadata, duration)
                 candidate = mixed
             candidate.replace(destination)

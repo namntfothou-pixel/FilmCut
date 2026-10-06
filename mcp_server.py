@@ -9,7 +9,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from engine import media, render, timeline
-from services import project_service, timeline_service, music_service
+from services import project_service, timeline_service, music_service, sfx_service
 
 logger = logging.getLogger("filmcut.mcp")
 
@@ -43,7 +43,7 @@ def _guard(function):
     return guarded
 
 
-def build_server(projects_root: Path | None = None) -> FastMCP:
+def build_server(projects_root: Path | None = None, sfx_library_root: Path | None = None) -> FastMCP:
     """Allow an isolated project root for tests, using the same existing services."""
     server = FastMCP("FilmCut", log_level="WARNING", instructions=(
         "Local video editing engine. Project arguments are project names. "
@@ -183,10 +183,53 @@ def build_server(projects_root: Path | None = None) -> FastMCP:
             timeline_start=timeline_start, source_in=source_in, source_out=source_out,
             volume_db=volume_db, fade_in=fade_in, fade_out=fade_out, loop=loop, enabled=enabled))
 
+    @server.tool(structured_output=True)
+    @_guard
+    def add_sfx(project: str, file: str, timeline_time: float, source_in: float = 0,
+                volume_db: float = 0, fade_in: float = 0, fade_out: float = 0,
+                enabled: bool = True, tags: list[str] | None = None) -> dict[str, Any]:
+        """Manually place an SFX event at seconds; simultaneous events are allowed."""
+        result = require_project(project)
+        return _success(sfx_service.add_sfx(result.project_path, file, timeline_time, source_in,
+                                          volume_db, fade_in, fade_out, enabled, tags))
+
+    @server.tool(structured_output=True)
+    @_guard
+    def remove_sfx(project: str, sfx_id: str) -> dict[str, Any]:
+        """Remove an event without deleting its audio file."""
+        result = require_project(project)
+        return _success(sfx_service.remove_sfx(result.project_path, sfx_id))
+
+    @server.tool(structured_output=True)
+    @_guard
+    def update_sfx(project: str, sfx_id: str, file: str | None = None,
+                   timeline_time: float | None = None, source_in: float | None = None,
+                   volume_db: float | None = None, fade_in: float | None = None,
+                   fade_out: float | None = None, enabled: bool | None = None,
+                   tags: list[str] | None = None) -> dict[str, Any]:
+        """Update supplied SFX fields with validation and automatic timeline history."""
+        result = require_project(project)
+        return _success(sfx_service.update_sfx(result.project_path, sfx_id, file=file,
+            timeline_time=timeline_time, source_in=source_in, volume_db=volume_db,
+            fade_in=fade_in, fade_out=fade_out, enabled=enabled, tags=tags))
+
+    @server.tool(structured_output=True)
+    @_guard
+    def list_sfx_library() -> dict[str, Any]:
+        """List the local catalog with normalized tags and asset availability."""
+        return _success(sfx_service.list_sfx_library(library_root=sfx_library_root))
+
+    @server.tool(structured_output=True)
+    @_guard
+    def search_sfx_by_tags(tags: list[str], match_all: bool = True) -> dict[str, Any]:
+        """Search available SFX by all tags (default) or any tag, without AI."""
+        return _success(sfx_service.search_sfx_by_tags(tags, match_all, library_root=sfx_library_root))
+
     return server
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.WARNING)  # Logging goes to stderr.
     root = os.environ.get("FILMCUT_PROJECTS_ROOT")
-    build_server(Path(root) if root else None).run(transport="stdio")
+    library = os.environ.get("FILMCUT_SFX_LIBRARY")
+    build_server(Path(root) if root else None, Path(library) if library else None).run(transport="stdio")

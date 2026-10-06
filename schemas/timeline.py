@@ -3,9 +3,10 @@
 import math
 from typing import Annotated, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from schemas.project import validate_project_name
+from schemas.sfx import normalize_tags
 
 Timestamp = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 Positive = Annotated[float, Field(gt=0, allow_inf_nan=False)]
@@ -100,8 +101,54 @@ class MusicClip(IntentModel):
         return self.timeline_start + self.duration
 
 
-class SFXClip(AudioClip):
-    """Sound-effect placement."""
+class SFXClip(IntentModel):
+    """An overlapping, timestamped SFX event; never a rendering instruction."""
+
+    id: Identifier
+    file: Identifier = Field(validation_alias=AliasChoices("file", "source"))
+    timeline_time: Timestamp = Field(default=0, validation_alias=AliasChoices("timeline_time", "timeline_start"))
+    source_in: Timestamp = 0
+    source_out: Positive | None = None  # Preserve earlier explicitly trimmed SFX.
+    volume_db: Annotated[float, Field(ge=-120, le=60, allow_inf_nan=False)] = 0
+    fade_in: Timestamp = 0
+    fade_out: Timestamp = 0
+    enabled: bool = True
+    tags: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def legacy_fields(cls, value):
+        if isinstance(value, dict):
+            value = dict(value)
+            if "volume" in value:
+                gain = value.pop("volume")
+                if "volume_db" in value or not isinstance(gain, (int, float)) or not math.isfinite(gain) or gain < 0:
+                    raise ValueError("Invalid or conflicting legacy SFX volume")
+                value["volume_db"] = 20 * math.log10(gain) if gain else -120
+            if "speed" in value and value.pop("speed") != 1:
+                raise ValueError("SFX speed changes are not supported")
+        return value
+
+    @field_validator("tags")
+    @classmethod
+    def valid_tags(cls, value):
+        return normalize_tags(value)
+
+    @model_validator(mode="after")
+    def valid_source(self):
+        if not self.file.strip():
+            raise ValueError("SFX requires a nonempty file")
+        if self.source_out is not None and self.source_out <= self.source_in:
+            raise ValueError("SFX source_out must exceed source_in")
+        return self
+
+    @property
+    def source(self):
+        return self.file
+
+    @property
+    def timeline_start(self):
+        return self.timeline_time
 
 
 class Transition(IntentModel):

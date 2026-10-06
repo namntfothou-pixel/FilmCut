@@ -1,4 +1,4 @@
-"""Manual BGM preparation and dialogue-preserving, peak-limited audio mixing."""
+"""Manual BGM/SFX preparation and dialogue-preserving peak-limited mixing."""
 
 import json
 import math
@@ -28,7 +28,7 @@ def probe_audio(file: str | Path) -> dict:
     except OSError as exc:
         raise AudioError("audio_probe_failed", str(exc)) from exc
     if result.returncode:
-        raise AudioError("invalid_audio", "ffprobe rejected the music file", stderr=result.stderr, returncode=result.returncode)
+        raise AudioError("invalid_audio", "ffprobe rejected the audio file", stderr=result.stderr, returncode=result.returncode)
     try:
         data = json.loads(result.stdout)
         stream = data["streams"][0]
@@ -55,6 +55,29 @@ def validate_music_source(item, folder: Path) -> dict:
     return metadata
 
 
+def validate_sfx_source(item, folder: Path) -> dict:
+    metadata = probe_audio(resolve_music(item, folder))
+    end = metadata["duration"] if item.source_out is None else item.source_out
+    if item.source_in >= end or end > metadata["duration"] + 1e-6:
+        raise AudioError("sfx_trim_out_of_range", "SFX source trim must lie inside its audio duration")
+    duration = end - item.source_in
+    if item.fade_in + item.fade_out > duration:
+        raise AudioError("invalid_sfx_fades", "SFX fades exceed its remaining source duration")
+    return {**metadata, "playback_duration": duration}
+
+
+def _gain_fade_filters(duration, volume_db, fade_in, fade_out):
+    total = fade_in + fade_out
+    factor = min(1, duration / total) if total else 1
+    fade_in, fade_out = fade_in * factor, fade_out * factor
+    filters = ["asetpts=PTS-STARTPTS", f"atrim=duration={duration:.12g}", f"volume={volume_db:.12g}dB"]
+    if fade_in:
+        filters.append(f"afade=t=in:st=0:d={fade_in:.12g}")
+    if fade_out:
+        filters.append(f"afade=t=out:st={duration - fade_out:.12g}:d={fade_out:.12g}")
+    return filters
+
+
 def prepare_music(item, folder: Path, video_duration: float, workspace: Path, index: int) -> Path | None:
     """Trim once, repeat only that interval, then apply gain and endpoint fades."""
     if not item.enabled or item.timeline_start >= video_duration:
@@ -71,39 +94,49 @@ def prepare_music(item, folder: Path, video_duration: float, workspace: Path, in
         arguments += ["-stream_loop", "-1"]
     arguments += ["-i", str(segment)]
     # If the timeline truncates the music, shorten both fades proportionally.
-    total_fade = item.fade_in + item.fade_out
-    factor = min(1, duration / total_fade) if total_fade else 1
-    fade_in, fade_out = item.fade_in * factor, item.fade_out * factor
-    filters = ["asetpts=PTS-STARTPTS", f"atrim=duration={duration:.12g}", f"volume={item.volume_db:.12g}dB"]
-    if fade_in:
-        filters.append(f"afade=t=in:st=0:d={fade_in:.12g}")
-    if fade_out:
-        filters.append(f"afade=t=out:st={duration - fade_out:.12g}:d={fade_out:.12g}")
+    filters = _gain_fade_filters(duration, item.volume_db, item.fade_in, item.fade_out)
     run_ffmpeg([*arguments, "-map", "0:a:0", "-af", ",".join(filters), "-t", f"{duration:.12g}",
                 "-ar", "48000", "-ac", "2", "-c:a", "pcm_f32le", str(prepared)])
     return prepared
 
 
-def mix_music(video: Path, items: list, folder: Path, duration: float, workspace: Path, output: Path) -> bool:
+def prepare_sfx(item, folder: Path, video_duration: float, workspace: Path, index: int) -> Path | None:
+    if not item.enabled or item.timeline_time >= video_duration:
+        return None
+    info = validate_sfx_source(item, folder)
+    duration = min(info["playback_duration"], video_duration - item.timeline_time)
+    output = workspace / f"sfx-{index}-prepared.wav"
+    filters = ["aresample=48000", *_gain_fade_filters(duration, item.volume_db, item.fade_in, item.fade_out)]
+    run_ffmpeg(["-n", "-ss", f"{item.source_in:.12g}", "-i", info["path"], "-map", "0:a:0", "-vn",
+                "-af", ",".join(filters), "-t", f"{duration:.12g}", "-ar", "48000", "-ac", "2",
+                "-c:a", "pcm_f32le", str(output)])
+    return output
+
+
+def mix_audio(video: Path, music_items: list, sfx_items: list, folder: Path, duration: float, workspace: Path, output: Path) -> bool:
     """Mix source dialogue at unity gain; limit peaks without automatic gain boost.
 
-    Returns False if no music plays. Caller can retain the original video then.
+    Returns False if no additional audio plays. Retain the original video then.
     Float PCM intermediates preserve gain until the final limiter, and H.264
-    video is stream-copied. Fades apply only to music, never to dialogue.
+    video is stream-copied. Fades apply only to added audio, never to dialogue.
     """
     prepared = []
-    for index, item in enumerate(items):
+    for index, item in enumerate(music_items):
         path = prepare_music(item, folder, duration, workspace, index)
         if path is not None:
-            prepared.append((item, path))
+            prepared.append((item.timeline_start, path))
+    for index, item in enumerate(sfx_items):
+        path = prepare_sfx(item, folder, duration, workspace, index)
+        if path is not None:
+            prepared.append((item.timeline_time, path))
     if not prepared:
         return False
     arguments = ["-n", "-i", str(video)]
     filters = ["[0:a:0]asetpts=PTS-STARTPTS[dialogue]"]
     inputs = ["[dialogue]"]
-    for index, (item, path) in enumerate(prepared, 1):
+    for index, (timestamp, path) in enumerate(prepared, 1):
         arguments += ["-i", str(path)]
-        delay_samples = round(item.timeline_start * 48000)
+        delay_samples = round(timestamp * 48000)
         filters.append(f"[{index}:a:0]adelay={delay_samples}S:all=1[m{index}]")
         inputs.append(f"[m{index}]")
     filters.append("".join(inputs) + f"amix=inputs={len(inputs)}:duration=first:dropout_transition=0:normalize=0,"
@@ -112,3 +145,8 @@ def mix_music(video: Path, items: list, folder: Path, duration: float, workspace
                 "-map", "0:v:0", "-map", "[mix]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
                 "-ar", "48000", "-ac", "2", "-t", f"{duration:.12g}", "-movflags", "+faststart", str(output)])
     return True
+
+
+def mix_music(video: Path, items: list, folder: Path, duration: float, workspace: Path, output: Path) -> bool:
+    """Compatibility helper for callers mixing only music."""
+    return mix_audio(video, items, [], folder, duration, workspace, output)

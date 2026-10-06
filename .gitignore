@@ -33,6 +33,12 @@ Desktop.ini
 !/assets/music/.gitkeep
 /assets/sfx/*
 !/assets/sfx/.gitkeep
+!/assets/sfx/README.md
+!/assets/sfx/library.json
+!/assets/sfx/library.example.json
+!/assets/sfx/audio/
+/assets/sfx/audio/*
+!/assets/sfx/audio/.gitkeep
 
 # Generated previews and exports
 /previews/

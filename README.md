@@ -122,13 +122,14 @@ width, height, and typed `video_tracks`, `audio_tracks`, `music_tracks`,
 `sfx_tracks`, and `subtitle_tracks`. Each track has a unique ID and its own
 clips (or subtitle cues). IDs are unique throughout the timeline.
 
-Video, dialogue, and SFX clips use `id`, `source`, `source_in`,
+Video and dialogue clips use `id`, `source`, `source_in`,
 `source_out`, `timeline_start`, `enabled`, `volume`, and `speed`. Trim intervals
 are half-open; duration is `(source_out - source_in) / speed`. Volume is a
 nonnegative linear gain (1 is unchanged); speed must be finite and positive.
 Disabled clips retain their intent but do not participate in overlap checks.
 All source files, including those on disabled clips, must exist. Relative
 sources resolve against the project directory during load and save.
+Music and SFX use decibel gain and their own fields documented below.
 
 Video, dialogue, and music clips cannot overlap within a track. Overlaps across
 tracks and within SFX tracks are allowed. Subtitle cues contain text and
@@ -189,7 +190,7 @@ clip audio volume is honored. AAC padding is trimmed before concatenation.
 
 This phase supports exactly one enabled video track with normal-speed clips
 placed contiguously from time zero. Gaps, overlapping tracks, speed changes,
-transitions, and active separate audio/SFX/subtitle tracks return explicit
+transitions, and active separate audio/subtitle tracks return explicit
 errors. Odd project dimensions are rejected because this H.264/yuv420p output
 requires even dimensions. Trim endpoints must be within the source duration.
 Frame quantization can change duration by approximately one output frame.
@@ -224,7 +225,8 @@ missing file. Invalid existing timelines return errors without being reset.
 `render_preview` uses the saved timeline and retains the current render limits.
 Five non-destructive video editing tools are also available: `add_clip`, `remove_clip`,
 `trim_clip`, `move_clip`, and `set_clip_speed`, plus three manual music tools:
-`add_music`, `remove_music`, and `update_music`.
+`add_music`, `remove_music`, and `update_music`. Five SFX tools are available:
+`add_sfx`, `remove_sfx`, `update_sfx`, `list_sfx_library`, and `search_sfx_by_tags`.
 
 Run the standalone official-SDK client test from the repository root:
 
@@ -233,9 +235,10 @@ Run the standalone official-SDK client test from the repository root:
 ```
 
 It launches a real server process, performs initialization and tool discovery,
-calls all fifteen tools, tests recovery after project and argument errors, and
+calls all twenty tools, tests recovery after project and argument errors, and
 renders synthetic media through MCP. Its temporary project storage is isolated
-using `FILMCUT_PROJECTS_ROOT`; real projects are untouched. On Linux use
+using `FILMCUT_PROJECTS_ROOT` and `FILMCUT_SFX_LIBRARY`; real projects and the
+local asset catalog are untouched. On Linux use
 `.venv/bin/python scripts/mcp_smoke_test.py`.
 
 To produce the exact Windows Codex configuration, run this on the Windows
@@ -352,3 +355,51 @@ video encode. Disabled or out-of-timeline music does not contribute to output.
 Real render tests measure source and BGM frequencies, loop persistence, selected
 source intervals, gains, fades, silence when disabled, timeline-end trims, and
 decoded output peaks. No AI music selection is implemented.
+
+## Manual SFX library and events
+
+The local library lives in `assets/sfx/`: `library.json` is the active versioned
+tag catalog, `audio/` holds user-supplied sounds, and `library.example.json`
+shows `impact_concrete_03.wav` with `impact`, `body`, `wall`, `concrete`, and
+`heavy` tags. The active catalog starts empty; the example does not include an
+audio file. See [the library instructions](assets/sfx/README.md) for adding files.
+Audio assets are ignored by Git and should be backed up separately. Set
+`FILMCUT_SFX_LIBRARY` to an absolute directory to use a different local catalog.
+
+Each event contains `id`, `file`, `timeline_time`, `source_in`, `volume_db`,
+`fade_in`, `fade_out`, `enabled`, and `tags`. Times are seconds; gain defaults to
+0 dB and accepts -120 through +60 dB. Tags are trimmed, case-insensitive, and
+deduplicated. Events play from source_in to the file's end, without looping,
+and are trimmed at video end. An optional `source_out` preserves older manually
+trimmed SFX entries. Earlier `source`, `timeline_start`, and linear `volume`
+fields migrate to canonical fields when saving; legacy speed must be 1.
+
+- `add_sfx(project, file, timeline_time, source_in=0, volume_db=0,
+  fade_in=0, fade_out=0, enabled=True, tags=None)` adds a manually supplied sound
+  to the sole SFX track, creating that track if needed.
+- `remove_sfx(project, sfx_id)` removes its event and preserves the sound file.
+- `update_sfx(project, sfx_id, ...)` changes supplied event fields while retaining
+  the ID. Zero, False, and an empty tag list are accepted updates.
+- `list_sfx_library()` returns catalog entries with absolute paths, tags,
+  availability, and missing-file diagnostics. Catalog paths must stay inside
+  the library. Invalid catalogs return structured errors.
+- `search_sfx_by_tags(tags, match_all=True)` returns available catalog entries
+  matching all requested tags; set match_all=False for any-tag matching.
+
+Every edit uses validated, locked timeline persistence with an exact backup of
+the previous `timeline.json` and a concise change summary. Missing/corrupt
+audio, invalid timestamps, source offsets, or fades leave the timeline unchanged.
+Fades must fit the remaining source audio; when video end truncates the event,
+fade lengths shrink proportionally to fit. Relative event files resolve against
+the project directory; Windows absolute paths are supported on Windows.
+
+SFX events may overlap on the same track or across tracks. They mix together
+with dialogue and BGM through the shared floating-point audio engine and one
+final limiter. Placement rounds to the nearest 48000 Hz audio sample rather than
+a video frame or millisecond. AAC encoding can introduce transient smearing.
+Disabled events and events at or beyond video end do not play. Rendering does
+not modify source files or the saved timeline.
+
+Real tests render three simultaneous tones with dialogue and looping BGM,
+verify timestamps, trims, gain, fades, clipping protection, cache cleanup, and
+H.264/AAC/48000 Hz output with ffprobe. No AI SFX detection is implemented.

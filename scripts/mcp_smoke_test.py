@@ -19,7 +19,8 @@ from mcp.client.stdio import stdio_client
 from engine.ffmpeg import run_ffmpeg
 TOOLS = {"ping", "create_project", "get_project", "analyze_folder", "get_timeline", "create_timeline", "render_preview",
          "add_clip", "remove_clip", "trim_clip", "move_clip", "set_clip_speed",
-         "add_music", "remove_music", "update_music"}
+         "add_music", "remove_music", "update_music", "add_sfx", "remove_sfx", "update_sfx",
+         "list_sfx_library", "search_sfx_by_tags"}
 
 
 async def run_smoke_test(configuration=None):
@@ -35,11 +36,20 @@ async def run_smoke_test(configuration=None):
         run_ffmpeg(["-n", "-f", "lavfi", "-i", "sine=frequency=960:sample_rate=44100", "-t", "0.2",
                     "-c:a", "pcm_s16le", str(music)])
         (source / "broken.mov").write_bytes(b"invalid media")
+        library = root / "sfx library"
+        (library / "audio").mkdir(parents=True)
+        effect = library / "audio" / "impact_concrete_03.wav"
+        run_ffmpeg(["-n", "-f", "lavfi", "-i", "sine=frequency=1440:sample_rate=48000", "-t", "0.2",
+                    "-c:a", "pcm_s16le", str(effect)])
+        (library / "library.json").write_text(json.dumps({"version": 1, "items": [
+            {"id": "impact_concrete_03", "file": "audio/impact_concrete_03.wav",
+             "tags": ["impact", "body", "wall", "concrete", "heavy"]}]}), encoding="utf-8")
         settings = configuration or {"command": sys.executable,
                                      "args": [str(REPOSITORY / "mcp_server.py")], "cwd": str(REPOSITORY)}
         params = StdioServerParameters(command=settings["command"], args=settings["args"],
                                        cwd=settings["cwd"], env={**os.environ, **settings.get("env", {}),
-                                       "FILMCUT_PROJECTS_ROOT": str(root / "projects")})
+                                       "FILMCUT_PROJECTS_ROOT": str(root / "projects"),
+                                       "FILMCUT_SFX_LIBRARY": str(library)})
         async with stdio_client(params) as (reader, writer):
             async with ClientSession(reader, writer) as session:
                 await session.initialize()
@@ -96,6 +106,20 @@ async def run_smoke_test(configuration=None):
                 music_id = added_music["data"]["music_id"]
                 await call("update_music", {"project": "Smoke", "music_id": music_id, "volume_db": -18})
                 await call("update_music", {"project": "Smoke", "music_id": music_id, "fade_in": -1}, success=False)
+                catalog = await call("list_sfx_library")
+                assert len(catalog["data"]["items"]) == 1
+                found = await call("search_sfx_by_tags", {"tags": ["IMPACT", "concrete", "heavy"]})
+                assert found["data"]["items"][0]["id"] == "impact_concrete_03"
+                await call("search_sfx_by_tags", {"tags": []}, success=False)
+                effects = []
+                for _ in range(3):
+                    added_sfx = await call("add_sfx", {"project": "Smoke", "file": str(effect),
+                        "timeline_time": 0.1, "volume_db": -12, "fade_in": 0.01, "fade_out": 0.01,
+                        "tags": ["impact", "concrete"]})
+                    effects.append(added_sfx["data"]["sfx_id"])
+                await call("update_sfx", {"project": "Smoke", "sfx_id": effects[0], "volume_db": -18})
+                await call("update_sfx", {"project": "Smoke", "sfx_id": effects[0], "timeline_time": -1}, success=False)
+                await call("remove_sfx", {"project": "Smoke", "sfx_id": "missing"}, success=False)
                 rendered = await call("render_preview", {"project": "Smoke"})
                 data = rendered["data"]
                 assert Path(data["preview_path"]).is_file()
@@ -103,6 +127,8 @@ async def run_smoke_test(configuration=None):
                 assert data["metadata"]["audio_codec"] == "aac"
                 assert data["metadata"]["sample_rate"] == 48000
                 assert abs(data["metadata"]["duration"] - 0.5) < 0.07
+                for sfx_id in effects:
+                    await call("remove_sfx", {"project": "Smoke", "sfx_id": sfx_id})
                 await call("remove_music", {"project": "Smoke", "music_id": music_id})
                 await call("remove_clip", {"project": "Smoke", "clip_id": clip_id})
                 removed = await call("get_timeline", {"project": "Smoke"})
@@ -116,7 +142,7 @@ async def run_smoke_test(configuration=None):
                 await call("ping")
                 return {"status": "PASS", "transport": "stdio", "tools": sorted(tools),
                         "project_error_recovery": "PASS", "preview_render": "PASS", "timeline_editing": "PASS",
-                        "music_mixing": "PASS"}
+                        "music_mixing": "PASS", "sfx_mixing": "PASS", "sfx_library": "PASS"}
 
 
 if __name__ == "__main__":
