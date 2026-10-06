@@ -19,12 +19,13 @@ def test_standalone_stdio_smoke_test():
     payload = json.loads(result.stdout)
     assert payload["status"] == "PASS"
     assert payload["preview_render"] == "PASS"
-    assert len(payload["tools"]) == 21
+    assert len(payload["tools"]) == 22
     assert payload["timeline_editing"] == "PASS"
     assert payload["music_mixing"] == "PASS"
     assert payload["sfx_mixing"] == "PASS"
     assert payload["sfx_library"] == "PASS"
     assert payload["subtitle_error_recovery"] == "PASS"
+    assert payload["transitions"] == "PASS"
 
 
 def test_unexpected_service_failure_is_contained(tmp_path, monkeypatch):

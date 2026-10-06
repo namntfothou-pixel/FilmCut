@@ -170,14 +170,13 @@ def test_ffmpeg_runner_never_uses_shell_and_reports_stderr(monkeypatch):
     assert caught.value.returncode == 1
 
 
-def test_transitions_are_rejected(render_project):
+def test_crossfade_renders_shorter_preview(render_project):
     from schemas.timeline import Transition
     timeline = load_timeline(render_project)
     timeline.video_tracks[0].transitions = [Transition(id="blend", from_clip="wide", to_clip="tall", duration=0.2)]
+    timeline.video_tracks[0].clips[1].timeline_start = 0.8
     save_timeline(render_project, timeline)
-    with pytest.raises(RenderError) as caught:
-        render_timeline(render_project)
-    assert caught.value.code == "unsupported_transitions"
+    assert probe_media(render_timeline(render_project))["duration"] == pytest.approx(1.8, abs=0.07)
 
 
 @pytest.mark.parametrize("failure,code", [(FileNotFoundError(), "ffmpeg_missing"),

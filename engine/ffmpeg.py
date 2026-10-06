@@ -77,3 +77,41 @@ def concatenate_normalized(clips: list[Path], durations: list[float], output: Pa
                   "-map", "[v]", "-map", "[a]", "-r", f"{fps:.12g}",
                   "-t", f"{sum(durations):.12g}", *encoding_arguments(), str(output)]
     run_ffmpeg(arguments)
+
+
+def transition_normalized(left: Path, right: Path, left_duration: float, right_duration: float,
+                          transition_type: str, duration: float, output: Path, *, fps: float) -> None:
+    """Join two normalized A/V files with a small, deterministic boundary graph."""
+    if transition_type not in {"cut", "crossfade", "fade_to_black"}:
+        raise FFmpegError("unsupported_transition", "Use cut, crossfade, or fade_to_black")
+    if any(not math.isfinite(value) or value <= 0 for value in (left_duration, right_duration, fps)):
+        raise FFmpegError("invalid_transition", "Input durations and FPS must be positive and finite")
+    if not math.isfinite(duration) or duration < 0 or duration > min(left_duration, right_duration):
+        raise FFmpegError("invalid_transition", "Transition duration exceeds its inputs")
+    if transition_type == "cut":
+        if duration != 0:
+            raise FFmpegError("invalid_transition", "A cut has zero duration")
+        return concatenate_normalized([left, right], [left_duration, right_duration], output, fps=fps)
+    if duration < 1 / fps - 1e-9:
+        raise FFmpegError("transition_too_short", "A blend must last at least one output frame")
+    total = left_duration + right_duration - duration
+    effect = "fade"
+    expression = ""
+    if transition_type == "fade_to_black":
+        # Explicit limited-range 8-bit YUV black at the midpoint. xfade's
+        # built-in fadeblack keeps some incoming picture visible there.
+        effect = "custom"
+        black = "if(eq(PLANE,0),16,128)"
+        expression = f":expr='if(gte(P,0.5),{black}+(A-{black})*(2*P-1),{black}+(B-{black})*(1-2*P))'"
+    filters = [
+        f"[0:v:0]trim=duration={left_duration:.12g},setpts=PTS-STARTPTS,fps={fps:.12g},settb=AVTB,format=yuv444p[lv]",
+        f"[1:v:0]trim=duration={right_duration:.12g},setpts=PTS-STARTPTS,fps={fps:.12g},settb=AVTB,format=yuv444p[rv]",
+        f"[lv][rv]xfade=transition={effect}:duration={duration:.12g}:offset={left_duration - duration:.12g}{expression},"
+        f"tpad=stop_mode=clone:stop_duration={1 / fps:.12g},trim=duration={total:.12g},format=yuv420p[v]",
+        f"[0:a:0]apad,atrim=duration={left_duration:.12g},asetpts=PTS-STARTPTS[la]",
+        f"[1:a:0]apad,atrim=duration={right_duration:.12g},asetpts=PTS-STARTPTS[ra]",
+        f"[la][ra]acrossfade=d={duration:.12g}:c1=tri:c2=tri,atrim=duration={total:.12g},asetpts=PTS-STARTPTS[a]",
+    ]
+    run_ffmpeg(["-n", "-i", str(left), "-i", str(right), "-filter_complex_threads", "1",
+                "-filter_complex", ";".join(filters), "-map", "[v]", "-map", "[a]", "-r", f"{fps:.12g}",
+                "-t", f"{total:.12g}", *encoding_arguments(), str(output)])

@@ -155,7 +155,7 @@ def test_transition_serialization(project):
     source = project[1]
     transition = Transition(id="transition", from_clip="clip1", to_clip="clip2", duration=0.5)
     timeline = Timeline(project="Timeline Test", video_tracks=[VideoTrack(id="video", clips=[
-        clip(source), clip(source, id="clip2", timeline_start=4)], transitions=[transition])])
+        clip(source), clip(source, id="clip2", timeline_start=3.5)], transitions=[transition])])
     save_timeline(project[0], timeline)
     assert load_timeline(project[0]) == timeline
 
@@ -224,14 +224,14 @@ def test_windows_path_preserved_and_reported():
 @pytest.mark.parametrize("kind", ["gap", "duplicate", "consumed"])
 def test_transition_boundary_conflicts(project, kind):
     source = project[1]
-    clips = [clip(source), clip(source, id="clip2", timeline_start=4)]
+    clips = [clip(source), clip(source, id="clip2", timeline_start=1)]
     transitions = [Transition(id="t1", from_clip="clip1", to_clip="clip2", duration=3)]
     if kind == "gap":
         clips[1].timeline_start = 5
     elif kind == "duplicate":
         transitions.append(Transition(id="t2", from_clip="clip1", to_clip="clip2", duration=0.5))
     else:
-        clips.append(clip(source, id="clip3", timeline_start=8))
+        clips.append(clip(source, id="clip3", timeline_start=2))
         transitions.append(Transition(id="t2", from_clip="clip2", to_clip="clip3", duration=3))
     with pytest.raises(ValidationError):
         Timeline(project="Timeline Test", video_tracks=[VideoTrack(id="video", clips=clips, transitions=transitions)])

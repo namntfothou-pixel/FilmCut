@@ -20,7 +20,7 @@ from engine.ffmpeg import run_ffmpeg
 TOOLS = {"ping", "create_project", "get_project", "analyze_folder", "get_timeline", "create_timeline", "render_preview",
          "add_clip", "remove_clip", "trim_clip", "move_clip", "set_clip_speed",
          "add_music", "remove_music", "update_music", "add_sfx", "remove_sfx", "update_sfx",
-         "list_sfx_library", "search_sfx_by_tags", "generate_subtitles"}
+         "list_sfx_library", "search_sfx_by_tags", "generate_subtitles", "set_transition"}
 
 
 async def run_smoke_test(configuration=None):
@@ -130,6 +130,19 @@ async def run_smoke_test(configuration=None):
                 assert data["metadata"]["audio_codec"] == "aac"
                 assert data["metadata"]["sample_rate"] == 48000
                 assert abs(data["metadata"]["duration"] - 0.5) < 0.07
+                following = await call("add_clip", {"project": "Smoke", "source": str(video), "source_in": 0,
+                                                    "source_out": 0.5, "position": 0.5})
+                for kind in ("crossfade", "fade_to_black"):
+                    changed = await call("set_transition", {"project": "Smoke", "clip_id": clip_id,
+                                                            "transition_type": kind, "duration": 0.125})
+                    assert changed["data"]["duration"] == 0.875
+                    rendered = await call("render_preview", {"project": "Smoke"})
+                    assert abs(rendered["data"]["metadata"]["duration"] - 0.875) < 0.07
+                await call("set_transition", {"project": "Smoke", "clip_id": clip_id,
+                                              "transition_type": "wipe", "duration": 0.125}, success=False)
+                await call("set_transition", {"project": "Smoke", "clip_id": clip_id,
+                                              "transition_type": "cut", "duration": 0})
+                await call("remove_clip", {"project": "Smoke", "clip_id": following["data"]["clip_id"]})
                 for sfx_id in effects:
                     await call("remove_sfx", {"project": "Smoke", "sfx_id": sfx_id})
                 await call("remove_music", {"project": "Smoke", "music_id": music_id})
@@ -146,7 +159,7 @@ async def run_smoke_test(configuration=None):
                 return {"status": "PASS", "transport": "stdio", "tools": sorted(tools),
                         "project_error_recovery": "PASS", "preview_render": "PASS", "timeline_editing": "PASS",
                         "music_mixing": "PASS", "sfx_mixing": "PASS", "sfx_library": "PASS",
-                        "subtitle_error_recovery": "PASS"}
+                        "subtitle_error_recovery": "PASS", "transitions": "PASS"}
 
 
 if __name__ == "__main__":

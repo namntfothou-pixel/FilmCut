@@ -155,14 +155,83 @@ class Transition(IntentModel):
     id: Identifier
     from_clip: Identifier
     to_clip: Identifier
-    kind: Literal["crossfade", "dissolve", "wipe"] = "crossfade"
-    duration: Positive
+    type: Literal["cut", "crossfade", "fade_to_black"] = Field(
+        default="crossfade", validation_alias=AliasChoices("type", "kind"))
+    duration: Timestamp
+
+    @model_validator(mode="after")
+    def valid_duration(self):
+        if (self.type == "cut" and self.duration != 0) or (self.type != "cut" and self.duration <= 0):
+            raise ValueError("Cuts require duration 0; crossfade/fade_to_black require a positive duration")
+        return self
+
+    @property
+    def overlap(self):
+        return self.duration
 
 
 class VideoTrack(IntentModel):
     id: Identifier
     clips: list[VideoClip] = Field(default_factory=list)
     transitions: list[Transition] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_boundaries(cls, value):
+        # The earlier intent-only schema serialized `kind` with touching clips.
+        # Convert that exact legacy representation to actual overlap positions;
+        # new `type` records always require explicit, correct placement.
+        if not isinstance(value, dict) or not value.get("transitions") or not all(
+                isinstance(item, dict) and "kind" in item and "type" not in item for item in value["transitions"]):
+            return value
+        value = dict(value)
+        clips = [VideoClip.model_validate(item).model_copy(deep=True) for item in value.get("clips", [])]
+        transitions = [Transition.model_validate(item) for item in value["transitions"]]
+        active = sorted((clip for clip in clips if clip.enabled), key=lambda clip: clip.timeline_start)
+        boundaries = {(item.from_clip, item.to_clip): item for item in transitions}
+        original_starts = {clip.id: clip.timeline_start for clip in active}
+        overlap = 0
+        for index, clip in enumerate(active):
+            if index:
+                left = active[index - 1]
+                transition = boundaries.get((left.id, clip.id))
+                if transition:
+                    if not math.isclose(original_starts[left.id] + left.duration, original_starts[clip.id], abs_tol=1e-9, rel_tol=0):
+                        raise ValueError("Legacy transition clips must touch before migration")
+                    overlap += transition.overlap
+            clip.timeline_start -= overlap
+        value["clips"], value["transitions"] = clips, transitions
+        return value
+
+    @property
+    def duration(self):
+        return max((clip.timeline_end for clip in self.clips if clip.enabled), default=0)
+
+    @model_validator(mode="after")
+    def valid_transitions(self):
+        active = sorted((clip for clip in self.clips if clip.enabled), key=lambda clip: clip.timeline_start)
+        adjacent = {(left.id, right.id): (left, right) for left, right in zip(active, active[1:])}
+        boundaries, usage = {}, {}
+        for transition in self.transitions:
+            boundary = (transition.from_clip, transition.to_clip)
+            if boundary not in adjacent:
+                raise ValueError("transition must reference adjacent enabled clips in timeline order")
+            if boundary in boundaries:
+                raise ValueError("multiple transitions at the same boundary")
+            boundaries[boundary] = transition
+            left, right = adjacent[boundary]
+            if transition.duration > min(left.duration, right.duration):
+                raise ValueError("transition duration exceeds a participating clip")
+            if not math.isclose(right.timeline_start, left.timeline_end - transition.overlap, rel_tol=0, abs_tol=1e-9):
+                raise ValueError("transition placement must match its overlap duration")
+            for clip in (left, right):
+                usage[clip.id] = usage.get(clip.id, 0) + transition.overlap
+                if usage[clip.id] > clip.duration + 1e-9:
+                    raise ValueError("transitions consume overlapping portions of a clip")
+        for left, right in zip(active, active[1:]):
+            if right.timeline_start < left.timeline_end - 1e-9 and (left.id, right.id) not in boundaries:
+                raise ValueError(f"prohibited overlap: {left.id} and {right.id}")
+        return self
 
 
 class AudioTrack(IntentModel):
@@ -221,6 +290,10 @@ class Timeline(IntentModel):
     sfx_tracks: list[SFXTrack] = Field(default_factory=list)
     subtitle_tracks: list[SubtitleTrack] = Field(default_factory=list)
 
+    @property
+    def duration(self):
+        return max((track.duration for track in self.video_tracks), default=0)
+
     @model_validator(mode="after")
     def valid_structure(self):
         validate_project_name(self.project)
@@ -231,7 +304,7 @@ class Timeline(IntentModel):
                 raise ValueError(f"duplicate timeline identifier: {identifier}")
             seen.add(identifier)
 
-        video_end = max((clip.timeline_end for track in self.video_tracks for clip in track.clips if clip.enabled), default=0)
+        video_end = self.duration
 
         def no_overlaps(items):
             active = sorted((item for item in items if item.enabled), key=lambda item: item.timeline_start)
@@ -245,29 +318,11 @@ class Timeline(IntentModel):
             items = track.cues if isinstance(track, SubtitleTrack) else track.clips
             for item in items:
                 unique(item.id)
-            if not isinstance(track, SFXTrack):
+            if not isinstance(track, (SFXTrack, VideoTrack)):
                 no_overlaps(items)
             if isinstance(track, VideoTrack):
-                clips = {clip.id: clip for clip in track.clips}
-                boundaries = set()
-                transition_usage = {}
                 for transition in track.transitions:
                     unique(transition.id)
-                    left, right = clips.get(transition.from_clip), clips.get(transition.to_clip)
-                    if left is None or right is None or left is right or not left.enabled or not right.enabled:
-                        raise ValueError("transition must reference two enabled clips on its video track")
-                    if not math.isclose(left.timeline_end, right.timeline_start, rel_tol=0, abs_tol=1e-9):
-                        raise ValueError("transition clips must touch in timeline order")
-                    if transition.duration > min(left.duration, right.duration):
-                        raise ValueError("transition duration exceeds a participating clip")
-                    boundary = (left.id, right.id)
-                    if boundary in boundaries:
-                        raise ValueError("multiple transitions at the same boundary")
-                    boundaries.add(boundary)
-                    for clip in (left, right):
-                        transition_usage[clip.id] = transition_usage.get(clip.id, 0) + transition.duration
-                        if transition_usage[clip.id] > clip.duration:
-                            raise ValueError("transitions consume overlapping portions of a clip")
         return self
 
 

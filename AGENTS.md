@@ -18,8 +18,10 @@ implemented, along with single-track video preview rendering and a FastMCP
 stdio adapter with non-destructive video-clip editing and timeline history.
 Manual music and SFX editing, a tagged local SFX catalog, and BGM/SFX mixing are
 implemented. Local faster-whisper subtitle generation, UTF-8 SRT timeline
-references, and optional plain preview burn-in are implemented. Transitions and
-final exports are not rendered yet. Whisper defaults to multilingual tiny on
+references, and optional plain preview burn-in are implemented. Cut, crossfade,
+and fade-to-black transitions with synchronized A/V overlap are implemented.
+Do not add flashy transitions, J-cuts, or L-cuts yet. Final exports are not
+implemented. Whisper defaults to multilingual tiny on
 CPU/int8, loads only on transcription requests, and supports a local model path.
 Do not download large models by default or add advanced subtitle styling.
 Do not implement automatic music selection or AI SFX detection.

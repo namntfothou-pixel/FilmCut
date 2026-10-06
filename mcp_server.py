@@ -232,6 +232,13 @@ def build_server(projects_root: Path | None = None, sfx_library_root: Path | Non
         result = require_project(project)
         return _success(subtitle_service.generate_subtitles(result.project_path, language))
 
+    @server.tool(structured_output=True)
+    @_guard
+    def set_transition(project: str, clip_id: str, transition_type: str, duration: float) -> dict[str, Any]:
+        """Set cut/crossfade/fade_to_black after a clip; shift later video positions and back up the timeline."""
+        result = require_project(project)
+        return _success(timeline_service.set_transition(result.project_path, clip_id, transition_type, duration))
+
     return server
 
 

@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 from uuid import uuid4
 
-from engine.ffmpeg import FFmpegError, concatenate_normalized, encoding_arguments, normalization_filter, run_ffmpeg
+from engine.ffmpeg import FFmpegError, concatenate_normalized, encoding_arguments, normalization_filter, run_ffmpeg, transition_normalized
 from engine.audio import mix_audio, resolve_music
 from engine.subtitle import SubtitleError, burn_subtitles as burn_subtitle_track
 from engine.media import MediaError, probe_media
@@ -79,16 +79,19 @@ def _render_clip(folder, metadata, clip, destination):
 
 def _active_clips(track):
     track = VideoTrack.model_validate(track.model_dump() if isinstance(track, VideoTrack) else track)
-    if track.transitions:
-        raise RenderError("unsupported_transitions", "Transitions are not rendered in this phase.")
     clips = sorted((clip for clip in track.clips if clip.enabled), key=lambda clip: clip.timeline_start)
     if not clips:
         raise RenderError("empty_track", "Video track has no enabled clips.")
     end = 0.0
+    boundaries = {(item.from_clip, item.to_clip): item for item in track.transitions}
+    previous = None
     for clip in clips:
-        if not math.isclose(clip.timeline_start, end, rel_tol=0, abs_tol=1e-9):
+        transition = boundaries.get((previous.id, clip.id)) if previous else None
+        overlap = transition.overlap if transition else 0
+        if not math.isclose(clip.timeline_start, end - overlap, rel_tol=0, abs_tol=1e-9):
             raise RenderError("unsupported_placement", "Clips must be contiguous from timeline time zero; gaps and overlaps are not supported.")
         end = clip.timeline_end
+        previous = clip
     return clips
 
 
@@ -100,8 +103,22 @@ def _render_track(folder, metadata, cache, track, destination):
             output = Path(workspace) / f"clip-{index:04d}.mp4"
             _render_clip(folder, metadata, clip, output)
             files.append(output)
-        concatenate_normalized(files, [clip.duration for clip in clips], destination, fps=metadata.fps)
-        _verify(destination, metadata, sum(clip.duration for clip in clips))
+        boundaries = {(item.from_clip, item.to_clip): item for item in track.transitions}
+        if any(item.overlap for item in track.transitions):
+            joined, duration = files[0], clips[0].duration
+            for index in range(1, len(files)):
+                transition = boundaries.get((clips[index - 1].id, clips[index].id))
+                kind, overlap = (transition.type, transition.overlap) if transition else ("cut", 0)
+                output = Path(workspace) / f"joined-{index:04d}.mp4"
+                transition_normalized(joined, files[index], duration, clips[index].duration,
+                                      kind, overlap, output, fps=metadata.fps)
+                duration += clips[index].duration - overlap
+                _verify(output, metadata, duration)
+                joined = output
+            joined.replace(destination)
+        else:
+            concatenate_normalized(files, [clip.duration for clip in clips], destination, fps=metadata.fps)
+        _verify(destination, metadata, clips[-1].timeline_end)
 
 
 def _error(exc):
@@ -209,7 +226,7 @@ def render_timeline(project, *, burn_subtitles: bool | None = None) -> Path:
             workspace = Path(workspace)
             candidate = workspace / "preview.mp4"
             _render_track(folder, metadata, cache, track, candidate)
-            duration = sum(clip.duration for clip in _active_clips(track))
+            duration = _active_clips(track)[-1].timeline_end
             mixed = workspace / "mixed.mp4"
             if mix_audio(candidate, music, sfx, folder, duration, workspace, mixed):
                 _verify(mixed, metadata, duration)

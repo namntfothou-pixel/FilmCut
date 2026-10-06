@@ -7,7 +7,7 @@ from engine.timeline import (
     TimelineError, _native_path, _project_context, load_timeline,
     save_locked_timeline, timeline_lock,
 )
-from schemas.timeline import VideoClip, VideoTrack
+from schemas.timeline import Transition, VideoClip, VideoTrack
 
 
 def _find_clip(timeline, clip_id):
@@ -66,9 +66,10 @@ def remove_clip(project, clip_id: str):
     """Remove only the clip's timeline entry; never delete its source file."""
     def change(timeline, folder):
         track, index, clip = _find_clip(timeline, clip_id)
-        if any(clip_id in (transition.from_clip, transition.to_clip) for transition in track.transitions):
+        if any(transition.type != "cut" and clip_id in (transition.from_clip, transition.to_clip) for transition in track.transitions):
             raise TimelineError("clip_has_transitions", "Cannot remove a clip referenced by a transition")
         track.clips.pop(index)
+        track.transitions = [item for item in track.transitions if clip_id not in (item.from_clip, item.to_clip)]
         return clip, f"Removed {clip.id}; other clip positions preserved."
     return _edit(project, "remove_clip", change)
 
@@ -99,3 +100,38 @@ def set_clip_speed(project, clip_id: str, speed: float):
         track.clips[index] = changed
         return changed, f"Set {clip.id} speed to {changed.speed:g}x (duration {changed.duration:g}s)."
     return _edit(project, "set_clip_speed", change)
+
+
+def set_transition(project, clip_id: str, transition_type: str, duration: float):
+    """Set the outgoing boundary and ripple later video positions by overlap delta."""
+    details = {}
+    def change(timeline, folder):
+        track, _, left = _find_clip(timeline, clip_id)
+        active = sorted((clip for clip in track.clips if clip.enabled), key=lambda clip: clip.timeline_start)
+        if not left.enabled or active.index(left) == len(active) - 1:
+            raise TimelineError("no_transition_boundary", "Choose an enabled clip with a following enabled clip")
+        index = active.index(left)
+        right = active[index + 1]
+        old = next((item for item in track.transitions if item.from_clip == left.id), None)
+        transition = Transition(id=old.id if old else f"transition-{uuid4().hex}", from_clip=left.id,
+                                to_clip=right.id, type=transition_type, duration=duration)
+        old_overlap = old.overlap if old else 0
+        if not abs(right.timeline_start - (left.timeline_end - old_overlap)) <= 1e-9:
+            raise TimelineError("noncontiguous_boundary", "A transition cannot bridge an existing timeline gap")
+        if transition.duration > min(left.duration, right.duration):
+            raise TimelineError("transition_too_long", "Transition exceeds a participating clip duration")
+        if 0 < transition.duration < 1 / timeline.fps - 1e-9:
+            raise TimelineError("transition_too_short", "Video transitions must last at least one output frame")
+        previous_duration = timeline.duration
+        delta = old_overlap - transition.overlap
+        shifted = []
+        for clip in active[index + 1:]:
+            old_start = clip.timeline_start
+            clip.timeline_start += delta
+            if delta:
+                shifted.append({"clip_id": clip.id, "before": old_start, "after": clip.timeline_start})
+        track.transitions = [item for item in track.transitions if item.from_clip != left.id] + [transition]
+        details.update(transition=transition.model_dump(mode="json"), shifted_clips=shifted,
+                       previous_duration=previous_duration, duration=timeline.duration)
+        return left, f"Set {transition.type} after {left.id} ({transition.duration:g}s); video duration {timeline.duration:g}s."
+    return {**_edit(project, "set_transition", change), **details}

@@ -132,18 +132,19 @@ All source files, including those on disabled clips, must exist. Relative
 sources resolve against the project directory during load and save.
 Music and SFX use decibel gain and their own fields documented below.
 
-Video, dialogue, and music clips cannot overlap within a track. Overlaps across
+Video clips may overlap only at an explicitly defined transition boundary.
+Dialogue and music clips cannot overlap within a track. Overlaps across
 tracks and within SFX tracks are allowed. Subtitle tracks reference a UTF-8 SRT
 `file` or contain inline cues, with `enabled` and `burn_in` flags. Inline cues
 contain text and timeline start/end times; enabled cues cannot overlap within a track.
 Touching intervals are allowed, with a 1e-9-second comparison tolerance.
 
-Video transitions contain an ID, `from_clip`, `to_clip`, `kind` (crossfade,
-dissolve, or wipe), and positive duration. They describe a blend at the boundary
-of two touching, enabled clips on the same track, without shifting clip placement.
-Duration cannot exceed either clip. A clip's incoming and outgoing transition
-durations cannot together exceed its duration; duplicate boundary transitions
-are rejected. Transition rendering is reserved for a later phase.
+Video transitions contain an ID, `from_clip`, `to_clip`, `type` (`cut`,
+`crossfade`, or `fade_to_black`), and `duration`. Cuts use duration 0; blends
+require positive duration and matching overlap between adjacent enabled clips.
+Duration cannot exceed either clip, and a clip's incoming/outgoing overlaps
+cannot together exceed its duration. Duplicate boundary transitions are rejected.
+The transition tool and rendering behavior are documented below.
 
 ```python
 from engine.timeline import (
@@ -191,8 +192,8 @@ letterboxing/pillarboxing. Silent clips receive a silent audio stream. Original
 clip audio volume is honored. AAC padding is trimmed before concatenation.
 
 This phase supports exactly one enabled video track with normal-speed clips
-placed contiguously from time zero. Gaps, overlapping tracks, speed changes,
-transitions, and active separate dialogue audio tracks return explicit
+placed contiguously from time zero, allowing declared transition overlaps.
+Gaps, overlapping video tracks, speed changes, and active separate dialogue audio tracks return explicit
 errors. Odd project dimensions are rejected because this H.264/yuv420p output
 requires even dimensions. Trim endpoints must be within the source duration.
 Frame quantization can change duration by approximately one output frame.
@@ -225,6 +226,8 @@ per-file errors plus `complete=false` on a partial scan. `create_timeline` is
 idempotent: it preserves an existing valid timeline and only initializes a
 missing file. Invalid existing timelines return errors without being reset.
 `render_preview` uses the saved timeline and retains the current render limits.
+`set_transition(project, clip_id, transition_type, duration)` edits the boundary
+after an enabled video clip, with automatic timeline history.
 Five non-destructive video editing tools are also available: `add_clip`, `remove_clip`,
 `trim_clip`, `move_clip`, and `set_clip_speed`, plus three manual music tools:
 `add_music`, `remove_music`, and `update_music`. Five SFX tools are available:
@@ -241,7 +244,7 @@ Run the standalone official-SDK client test from the repository root:
 ```
 
 It launches a real server process, performs initialization and tool discovery,
-calls all twenty-one tools, tests recovery after project and argument errors, and
+calls all twenty-two tools, tests recovery after project and argument errors, and
 renders synthetic media through MCP. Its temporary project storage is isolated
 using `FILMCUT_PROJECTS_ROOT` and `FILMCUT_SFX_LIBRARY`; real projects and the
 local asset catalog are untouched. On Linux use
@@ -291,7 +294,8 @@ in which case the edit is rejected without modifying the saved timeline.
   with a generated ID. It uses the sole video track or creates one; multiple video
   tracks are ambiguous because this API has no track argument.
 - `remove_clip(project, clip_id)` removes the matching video entry. A clip
-  referenced by a transition cannot be removed through this API.
+  referenced by a blending transition cannot be removed through this API.
+  Set the boundary to cut first; zero-duration cut records are cleaned on removal.
 - `trim_clip(project, clip_id, source_in, source_out)` changes source trim times
   while preserving the timeline start, volume, and speed.
 - `move_clip(project, clip_id, position)` changes the timeline start in seconds.
@@ -320,6 +324,63 @@ restore intent; no separate undo/restore MCP tool is added in this phase.
 Preview rendering still requires one contiguous track at speed 1. Editing gaps
 or speed changes is supported as intent; rendering those cases remains deferred.
 Manual music editing is described below; automatic music selection is not implemented.
+
+## Simple video transitions
+
+`set_transition(project, clip_id, transition_type, duration)` applies to the
+boundary after clip_id and its next enabled clip on the same track. An enabled
+successor is required; the tool rejects gaps, disabled clips, and terminal clips.
+Only `cut`, `crossfade`, and `fade_to_black` are supported.
+
+- `cut` switches directly to the next clip and requires duration 0.
+- `crossfade` blends outgoing/incoming pictures over the supplied duration.
+- `fade_to_black` fades the outgoing picture to black in the first half and
+  fades the incoming picture from black in the second half of that overlap.
+
+Both blends overlap video and original dialogue audio for exactly the same
+interval. Audio uses linear crossfades, including while the picture fades
+through black; there is no separate audio offset. J-cuts and L-cuts are not
+implemented. Blends must last at least one output frame and fit both clips.
+
+The tool stores a record in the video track's `transitions` list:
+
+```json
+{
+  "id": "transition-<id>",
+  "from_clip": "clip-a",
+  "to_clip": "clip-b",
+  "type": "crossfade",
+  "duration": 0.5
+}
+```
+
+It shifts subsequent enabled video clips by the change in overlap and stores
+their actual timeline_start values. Changing a 0.5-second crossfade to a cut
+restores those 0.5 seconds. Other tracks retain their absolute timestamps;
+review SFX/music placements and regenerate captions after changing transitions.
+The structured result includes the transition, shifted clip positions, previous
+and new total video duration, summary, and exact prior-timeline backup. Failed
+validation leaves the timeline/history unchanged.
+
+For a contiguous track, total duration is **sum of clip durations minus sum of
+transition overlaps**. Two 3-second clips with a 0.5-second blend render to
+5.5 seconds. `Timeline.duration` and `VideoTrack.duration` use stored actual
+clip endpoints, including cumulative overlaps. Blends must link adjacent clips;
+arbitrary overlaps and overlapping incoming/outgoing blend windows are rejected.
+Existing trim/move/speed edits must preserve any declared boundary constraints.
+
+The renderer first normalizes each clip, then joins boundaries using small,
+deterministic two-input FFmpeg graphs with synchronized xfade/acrossfade.
+Cut-only timelines retain the normal concatenation path. Mixed BGM/SFX and
+subtitle timing use the shortened rendered clock. Each intermediate and final
+MP4 is verified; cache cleanup and preservation of prior previews on failure
+remain in place. Frame quantization may alter duration by about one output frame.
+
+Earlier intent-only records using `kind: "crossfade"` and touching clips migrate
+to overlap positions in memory when loaded. Loading does not rewrite the file;
+the next save stores canonical `type` fields and backs up the original JSON.
+New records always require correctly placed overlaps. Flashy transitions are
+not implemented.
 
 ## Manual music and BGM mixing
 
