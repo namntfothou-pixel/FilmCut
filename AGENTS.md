@@ -9,7 +9,7 @@
 7. Every feature must have error handling.
 8. Run tests after every implementation phase.
 9. Do not build a GUI yet.
-10. Do not implement AI source selection yet.
+10. Source candidate ranking is allowed; do not automatically select footage or create a timeline.
 
 Use Python 3.11+ and the repository-local `.venv`. Keep dependencies inside
 that virtual environment. Keep source media unchanged and generated files out

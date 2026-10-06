@@ -22,7 +22,7 @@ TOOLS = {"ping", "create_project", "get_project", "analyze_folder", "get_timelin
          "add_music", "remove_music", "update_music", "add_sfx", "remove_sfx", "update_sfx",
          "list_sfx_library", "search_sfx_by_tags", "generate_subtitles", "set_transition",
          "set_j_cut", "set_l_cut", "reset_audio_offset", "analyze_source", "get_source_analysis",
-         "analyze_script", "get_script_breakdown"}
+         "analyze_script", "get_script_breakdown", "find_candidates_for_scene", "rank_sources_for_script"}
 
 
 async def run_smoke_test(configuration=None):
@@ -100,6 +100,11 @@ async def run_smoke_test(configuration=None):
                     "INT. ROOM - NIGHT\nMai opens the letter.\nMAI: You came back.\n\nEXT. GATE - NIGHT\nAN: I promised."})
                 assert len(script_result["data"]["breakdown"]["requirements"]) == 2
                 assert (await call("get_script_breakdown", {"project": "Smoke"}))["data"] == script_result["data"]
+                candidates = await call("find_candidates_for_scene", {"project": "Smoke", "scene_id": "scene_001"})
+                assert candidates["data"]["candidates"][0]["source_id"] == source_id
+                ranked = await call("rank_sources_for_script", {"project": "Smoke"})
+                assert len(ranked["data"]["scenes"]) == 2
+                await call("find_candidates_for_scene", {"project": "Smoke", "scene_id": "missing"}, success=False)
                 await call("analyze_script", {"project": "Smoke", "script": ""}, success=False)
                 assert (project / "timeline.json").read_bytes() == before_analysis
                 await call("get_timeline", {"project": "Smoke"})

@@ -249,7 +249,7 @@ Run the standalone official-SDK client test from the repository root:
 ```
 
 It launches a real server process, performs initialization and tool discovery,
-calls all twenty-nine tools, tests recovery after project and argument errors, and
+calls all thirty-one tools, tests recovery after project and argument errors, and
 renders synthetic media through MCP. Its temporary project storage is isolated
 using `FILMCUT_PROJECTS_ROOT` and `FILMCUT_SFX_LIBRARY`; real projects and the
 local asset catalog are untouched. On Linux use
@@ -751,3 +751,75 @@ selection and timeouts. An MCP client can also supply a model-produced
 and persistence path. `ScriptBreakdown.model_json_schema()` exposes the contract.
 No provider or model is loaded by default. Script input is limited to one
 million characters; no file paths are implicitly opened as script text.
+
+## Explainable source matching
+
+After saving a script breakdown and source analyses, use:
+
+- `find_candidates_for_scene(project, scene_id, limit=5)`
+- `rank_sources_for_script(project, limit=5)`
+
+These MCP tools and matching services read existing metadata and return ranked
+videos. They do not invoke a model, decode video, write files, select footage,
+or modify `timeline.json`. `limit` is 1–100 candidates **per scene**. The script
+result contains a `scenes` mapping in story order. Each scene returns
+`candidates` and `total_candidates`. Each candidate contains `source_id`, its
+native absolute `path`, a score in [0, 1], and all component explanations.
+Equal scores sort by source ID so repeated calls are deterministic. Short or
+poor matches remain visible with low scores; they are not silently excluded.
+
+The versioned policy `lexical-v1` uses this formula:
+
+`score = sum(active weight × component score) / sum(active weights)`
+
+| Component | Weight | Rule |
+| --- | ---: | --- |
+| Characters | 0.20 | Fraction of required names present, with exact Unicode-normalized, case-insensitive matching; extra characters are allowed |
+| Action | 0.20 | Fraction of required content tokens found in source action |
+| Emotion | 0.10 | Required-token coverage against source emotion |
+| Location | 0.10 | Required-token coverage against source location |
+| Shot size | 0.10 | Same size/alias = 1; neighboring size = 0.5; other sizes = 0 |
+| Visual quality | 0.10 | Explicit keyword baseline, minus penalties for reported problems |
+| Continuity | 0.10 | Average best source-note token coverage for each continuity requirement |
+| Usable duration | 0.10 | `min((usable_end - usable_start) / estimated_duration, 1)` |
+
+Missing scene preferences deactivate their components and their weights. Quality
+and duration always participate. Missing source text or an unknown usable range
+scores zero for that component. For example, with all preferences active, a
+source matching everything except one of two required characters scores 0.90:
+`0.20 × 0.5 + 0.80 × 1`. A half-length usable interval loses 0.05 more.
+These values are suitability heuristics, **not confidence probabilities**.
+
+Text rules retain Unicode accents, case-fold and split words, and remove the
+small English stop-word list in `analysis/matching.py`. Each text component
+exposes matched/missing tokens and its rule. A mismatch in explicit negation
+markers (`no`, `not`, `never`, `without`, `không`, `chưa`, `chẳng`) forces that
+text comparison to zero. This is a conservative lexical guard, not grammatical
+or semantic understanding. It does not detect every contradiction, resolve
+pronouns, translate, or recognize synonyms. Shared vocabulary can still match
+opposite actions; review the evidence before editing.
+
+Shot-size aliases and their size ordering are explicit in `SHOT_GROUPS` in
+`analysis/matching.py` (extreme wide through extreme close-up). Unrecognized
+labels require exact normalized matching. Continuity compares each requirement
+to individual source notes; it does not establish continuity between selected
+clips or scenes.
+
+Quality uses the reported `visual_quality` text, without pixel measurements:
+missing = 0; recognized negative words or negation = 0.25; recognized positive
+words = 1; otherwise = 0.5. Negative evidence takes precedence. Subtract 0.1 per
+distinct nonempty `problems` entry, capped at 0.5, and clamp at zero. Keyword
+lists are explicit in the scorer, and the response reports recognized words,
+baseline, and penalty. Mixed descriptions such as “sharp but blurry” therefore
+receive the conservative negative baseline. Non-English or unfamiliar quality
+terms may use the unrecognized baseline; normalize upstream observations if a
+shared vocabulary is desired.
+
+Every component reports its score, configured weight, active status, required
+and observed evidence, explanation, and normalized contribution. The response
+also includes the policy version, weights, formula, limitations, and tie rule.
+Sources with missing/corrupt analyses, invalid metadata, or unavailable files
+are skipped with structured per-source `warnings`. An empty index yields empty
+candidate lists. Invalid script/index data, unknown scene IDs, and invalid
+limits return structured errors. Reanalyze changed footage before matching;
+ranking trusts the saved metadata and does not re-probe content.

@@ -12,6 +12,7 @@ from engine import media, render, timeline
 from services import project_service, timeline_service, music_service, sfx_service, subtitle_service
 from services import analysis_service
 from services import script_service
+from services import matching_service
 from analysis.provider import AnalysisProvider, SuppliedAnalysisProvider
 from analysis.script_provider import ScriptAnalysisProvider
 
@@ -310,6 +311,25 @@ def build_server(projects_root: Path | None = None, sfx_library_root: Path | Non
         """Read validated scene requirements without invoking a script analyzer."""
         result = require_project(project)
         return _success(script_service.get_script_breakdown(result.project_path))
+
+    @server.tool(structured_output=True)
+    @_guard
+    def find_candidates_for_scene(project: str, scene_id: str, limit: int = 5) -> dict[str, Any]:
+        """Rank indexed sources for a saved scene using eight explained lexical scores.
+
+        Returns component evidence, weights, contributions, and skipped-source
+        warnings. Scores are suitability heuristics, not probabilities. Does not
+        select footage, invoke a model, or modify the timeline.
+        """
+        result = require_project(project)
+        return _success(matching_service.find_candidates_for_scene(result.project_path, scene_id, limit))
+
+    @server.tool(structured_output=True)
+    @_guard
+    def rank_sources_for_script(project: str, limit: int = 5) -> dict[str, Any]:
+        """Return explained candidates for every saved scene in story order; no editing."""
+        result = require_project(project)
+        return _success(matching_service.rank_sources_for_script(result.project_path, limit))
 
     return server
 
