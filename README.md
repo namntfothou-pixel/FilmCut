@@ -249,7 +249,7 @@ Run the standalone official-SDK client test from the repository root:
 ```
 
 It launches a real server process, performs initialization and tool discovery,
-calls all thirty-six tools, tests recovery after project and argument errors, and
+calls all thirty-eight tools, tests recovery after project and argument errors, and
 renders synthetic media through MCP. Its temporary project storage is isolated
 using `FILMCUT_PROJECTS_ROOT` and `FILMCUT_SFX_LIBRARY`; real projects and the
 local asset catalog are untouched. On Linux use
@@ -991,3 +991,73 @@ and a literal 12.42-second SFX entry appears in the timeline. A real preview
 test checks music endpoint timing and SFX placement through spectral tone
 measurements, preserves dialogue level, and verifies H.264/AAC/48 kHz output
 with ffprobe. The stdio smoke test exercises all four tools and renders the mix.
+
+## Edit Refinement Planner
+
+`plan_edit_refinement(project, recommendations=None)` analyzes the current
+rough cut, script requirements, and valid source analyses. It saves an
+inspectable `analysis/edit_refinement_plan.json` and returns it without changing
+the real timeline. The plan lists each adjacent boundary, recommended type,
+duration, enabled flag, explanation/evidence, warnings, and predicted before /
+after duration. A full timeline fingerprint binds it to the inspected edit.
+
+`apply_edit_refinement(project)` validates the saved plan again, simulates all
+edits, then atomically saves the resulting `timeline.json` with one exact prior
+snapshot in timeline history. It reports changed boundaries and actual duration.
+The existing preview and SoundPlan become stale; call `render_preview` afterward
+and replan sound if necessary. It does not generate audio, edit source files,
+or add FFmpeg logic. Both operations use the existing validated cut/J/L editing
+services on a temporary timeline under cache; intermediate per-boundary changes
+never partially modify the real project.
+
+The default policy is deliberately sparse:
+
+- Hard cuts remain the default. At most `max(1, floor(boundaries / 3))` new
+  enabled non-hard recommendations are allowed, and they cannot be adjacent.
+- Crossfade requires an explicit dissolve, montage, dream-sequence, or memory
+  montage cue and no reported dialogue on either side. Emotion or a location
+  change alone never triggers a crossfade.
+- Fade-to-black requires an explicit scene/time break such as “next day”,
+  “hours later”, “time jump”, “scene break”, or a fade-out note, with no reported
+  dialogue at the boundary.
+- J-cut leads incoming dialogue over a listening/reaction shot, or follows an
+  explicit J-cut note. L-cut extends outgoing dialogue over a listening/reaction
+  shot, or follows an explicit L-cut note. Both require real source audio and
+  available pre/post-roll. The default overlap is bounded by 0.2 seconds and
+  available handles. This is an untimed metadata recommendation, not word-level
+  speech alignment; listen and review before application.
+- Existing visual transitions and independent source-audio offsets are preserved
+  through disabled recommendations. They are not automatically overwritten.
+
+Visual blends are short, capped at a quarter of each participating clip, and
+aligned to output frames. They shorten the edit through the existing overlap
+semantics. J/L edits change independent audio fields while leaving video frames
+and placements intact. They are never visual transition types.
+
+Blends (including changing a blend back to a hard cut) ripple picture positions.
+When timed audio/music/SFX/subtitles or independent audio offsets already exist,
+new visual timing shifts are blocked. Defaults retain hard cuts and warn when
+narrative cues suggest a blend that cannot be safely applied. Refine picture
+before Sound Director application, or use dialogue audio edits that preserve
+picture timing. The planner does not silently retime manually synchronized
+sound or subtitle cues.
+
+For provider-neutral/custom proposals, pass `recommendations` objects with
+`from_clip`, `to_clip`, `type` (`hard_cut`, `crossfade`, `j_cut`, `l_cut`, or
+`fade_to_black`), `duration`, `enabled`, `reason`, and optional string-list
+`evidence`. Custom proposals still obey the sparse budget, boundary validation,
+source-handle checks, and timing protection. A disabled recommendation has no
+edit effect. Plan again with revised recommendations after changing choices;
+application rejects stale fingerprints or duration predictions that no longer
+match the proposed edits. There is no model dependency or silent LLM decision.
+
+Plans and edits fail without modifying the real timeline if any boundary,
+source handle, budget, or resulting timeline is invalid. Reapplying a changed
+plan against its old fingerprint is rejected; generate a fresh plan for further
+refinement. A no-op apply creates no history entry.
+
+Synthetic tests render real before/after previews for crossfade, fade-to-black,
+J-cut, and L-cut. They verify duration/codec output with ffprobe, compare all
+video frame hashes for J/L edits, preserve source hashes, and check history,
+stale plans, disabled decisions, sparse budgets, insufficient audio handles,
+and protection of timed sound. The stdio smoke test exercises both MCP tools.

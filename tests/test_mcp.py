@@ -19,7 +19,8 @@ def test_standalone_stdio_smoke_test():
     payload = json.loads(result.stdout)
     assert payload["status"] == "PASS"
     assert payload["preview_render"] == "PASS"
-    assert len(payload["tools"]) == 36
+    assert len(payload["tools"]) == 38
+    assert payload["edit_refinement"] == "PASS"
     assert payload["sound_director"] == "PASS"
     assert payload["rough_cut"] == "PASS"
     assert payload["timeline_editing"] == "PASS"

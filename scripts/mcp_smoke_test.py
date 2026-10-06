@@ -24,7 +24,7 @@ TOOLS = {"ping", "create_project", "get_project", "analyze_folder", "get_timelin
          "list_sfx_library", "search_sfx_by_tags", "generate_subtitles", "set_transition",
          "set_j_cut", "set_l_cut", "reset_audio_offset", "analyze_source", "get_source_analysis",
          "analyze_script", "get_script_breakdown", "find_candidates_for_scene", "rank_sources_for_script", "build_rough_cut",
-         "plan_music", "apply_music_plan", "plan_sfx", "apply_sfx_plan"}
+         "plan_music", "apply_music_plan", "plan_sfx", "apply_sfx_plan", "plan_edit_refinement", "apply_edit_refinement"}
 
 
 async def run_smoke_test(configuration=None):
@@ -208,6 +208,10 @@ async def run_smoke_test(configuration=None):
                 await call("apply_sfx_plan", {"project": "Smoke"})
                 sounded = await call("render_preview", {"project": "Smoke"})
                 assert abs(sounded["data"]["metadata"]["duration"] - 0.5) < 0.07
+                planned_refinement = await call("plan_edit_refinement", {"project": "Smoke"})
+                assert not planned_refinement["data"]["plan"]["decisions"]  # A single shot has no boundary.
+                refined = await call("apply_edit_refinement", {"project": "Smoke"})
+                assert not refined["data"]["changed"]
                 malformed = await session.call_tool("get_project", {})
                 assert malformed.isError  # SDK argument validation error, process stays alive.
                 await call("ping")
@@ -215,7 +219,7 @@ async def run_smoke_test(configuration=None):
                         "project_error_recovery": "PASS", "preview_render": "PASS", "timeline_editing": "PASS",
                         "music_mixing": "PASS", "sfx_mixing": "PASS", "sfx_library": "PASS",
                         "subtitle_error_recovery": "PASS", "transitions": "PASS", "audio_offsets": "PASS", "rough_cut": "PASS",
-                        "sound_director": "PASS"}
+                        "sound_director": "PASS", "edit_refinement": "PASS"}
 
 
 if __name__ == "__main__":

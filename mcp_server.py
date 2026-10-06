@@ -15,6 +15,7 @@ from services import script_service
 from services import matching_service
 from services import rough_cut_service
 from services import sound_service
+from services import refinement_service
 from analysis.provider import AnalysisProvider, SuppliedAnalysisProvider
 from analysis.script_provider import ScriptAnalysisProvider
 
@@ -384,6 +385,26 @@ def build_server(projects_root: Path | None = None, sfx_library_root: Path | Non
         """Validate saved plan/assets and apply visible SFX entries with timeline history."""
         result = require_project(project)
         return _success(sound_service.apply_sfx_plan(result.project_path, library_root=sfx_library_root))
+
+    @server.tool(structured_output=True)
+    @_guard
+    def plan_edit_refinement(project: str, recommendations: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        """Save an inspectable conservative boundary plan; timeline remains unchanged.
+
+        Defaults to hard cuts. Narrative notes justify sparse blends; dialogue
+        flow and source handles justify J/L audio edits. Optional recommendations:
+        from_clip, to_clip, type (hard_cut/crossfade/j_cut/l_cut/fade_to_black),
+        duration, enabled, reason, evidence. Uses existing edit validation.
+        """
+        result = require_project(project)
+        return _success(refinement_service.plan_edit_refinement(result.project_path, recommendations=recommendations))
+
+    @server.tool(structured_output=True)
+    @_guard
+    def apply_edit_refinement(project: str) -> dict[str, Any]:
+        """Apply the saved inspected plan atomically with timeline history; render preview afterward."""
+        result = require_project(project)
+        return _success(refinement_service.apply_edit_refinement(result.project_path))
 
     return server
 

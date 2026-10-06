@@ -35,6 +35,9 @@ Semantic source analysis lives in `analysis/`, `schemas/source_analysis.py`, and
 `services/analysis_service.py`, separately from deterministic rendering. Keep
 model providers abstract and injectable. Save observations under each project's
 `analysis/` directory. Analysis and ranking never edit timelines; only the
-explicit rough-cut service may turn their results into a timeline. Keep its
+explicit rough-cut and refinement apply services may turn their results into a timeline. Keep their
 selection policy separate from the deterministic renderer. Rough cuts do not
 add music or SFX; separate Sound Director apply operations may add them.
+Refinement plans remain inspectable before application. Keep hard cuts as the
+default, preserve manual edits, and never represent J/L cuts as visual effects.
+Do not shift existing timed audio/subtitles silently when adding overlap.
