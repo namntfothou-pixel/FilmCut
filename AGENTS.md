@@ -9,7 +9,7 @@
 7. Every feature must have error handling.
 8. Run tests after every implementation phase.
 9. Do not build a GUI yet.
-10. Source candidate ranking is allowed; do not automatically select footage or create a timeline.
+10. Automatic rough cuts are allowed only through the explicit `build_rough_cut` workflow, with validated sources, timeline history, an edit-decision report, and a preview.
 
 Use Python 3.11+ and the repository-local `.venv`. Keep dependencies inside
 that virtual environment. Keep source media unchanged and generated files out
@@ -32,4 +32,7 @@ MCP stdout is reserved for protocol messages; log to stderr.
 Semantic source analysis lives in `analysis/`, `schemas/source_analysis.py`, and
 `services/analysis_service.py`, separately from deterministic rendering. Keep
 model providers abstract and injectable. Save observations under each project's
-`analysis/` directory; never automatically edit the timeline from observations.
+`analysis/` directory. Analysis and ranking never edit timelines; only the
+explicit rough-cut service may turn their results into a timeline. Keep its
+selection policy separate from the deterministic renderer. Do not add music
+or SFX automatically.

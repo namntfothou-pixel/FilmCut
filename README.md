@@ -249,7 +249,7 @@ Run the standalone official-SDK client test from the repository root:
 ```
 
 It launches a real server process, performs initialization and tool discovery,
-calls all thirty-one tools, tests recovery after project and argument errors, and
+calls all thirty-two tools, tests recovery after project and argument errors, and
 renders synthetic media through MCP. Its temporary project storage is isolated
 using `FILMCUT_PROJECTS_ROOT` and `FILMCUT_SFX_LIBRARY`; real projects and the
 local asset catalog are untouched. On Linux use
@@ -823,3 +823,66 @@ are skipped with structured per-source `warnings`. An empty index yields empty
 candidate lists. Invalid script/index data, unknown scene IDs, and invalid
 limits return structured errors. Reanalyze changed footage before matching;
 ranking trusts the saved metadata and does not re-probe content.
+
+## Auto Rough Cut
+
+Call `build_rough_cut(project)` after analyzing the script, indexing footage,
+and saving source analyses. This is an explicit edit operation: it replaces the
+current timeline with a fresh video-only rough cut, keeps the exact prior
+`timeline.json` in `timeline_history/`, and renders
+`projects/<project>/preview/preview.mp4`. Existing music, SFX, subtitles, and
+manual edits remain in the backup, not in the new rough cut. Original footage
+is never changed. No model invocation or new FFmpeg implementation is involved.
+
+Selection follows this deterministic policy:
+
+1. Read all saved scenes in story order and all valid indexed source analyses.
+   Probe candidate media again; exclude corrupt/unavailable sources, unknown
+   usable ranges, and ranges exceeding the current media duration.
+2. Score candidates using the existing eight-component matcher. If a scene has
+   story preferences, require some positive evidence in at least one of its
+   character/action/emotion/location/shot-size/continuity components. Quality
+   and duration alone cannot qualify footage for such a scene. This is a
+   permissive lexical eligibility rule, not proof of semantic suitability.
+3. Prefer unused eligible sources, then descending match score, then visual
+   quality as a tie-breaker, then source ID. Reuse occurs only when no unused
+   eligible source remains for that scene. Canonical file paths identify reuse,
+   so different IDs pointing to the same file do not bypass the rule.
+4. Round usable bounds inward to project-frame boundaries. Start each selected
+   clip at its usable start, trim to the remaining scene duration, and use more
+   candidates if necessary. When all eligible sources have already been used,
+   repeat the best candidate's usable range and explicitly report that reuse.
+5. Round each estimated duration to the nearest output frame (half up, minimum
+   one frame). Lay clips contiguously at speed 1 with original source audio and
+   explicit zero-duration cut transitions. No music, SFX, subtitles, J/L cuts,
+   or visual blend effects are added automatically.
+
+No eligible source for any scene fails the whole build before changing the
+project timeline. Builds exceeding 1,000 clips are rejected to bound accidental
+repetition from unrealistic durations. Scene duration is fulfilled to the
+reported frame-rounded target; repetition may therefore be visible and should
+be reviewed before further editing.
+
+The service validates and renders a staged saved timeline in a temporary
+project under the real project's cache. Only after successful rendering does it
+publish the new canonical timeline, decision report, and preview while holding
+the project timeline lock. The existing renderer handles normalization and
+output verification. Normal render failures preserve the prior timeline,
+report, and preview. Publication errors restore the old timeline/report, and
+return any rollback error explicitly. A history snapshot can remain after a
+failed publication. This is not a crash-atomic multi-file filesystem transaction;
+`timeline.json` remains authoritative.
+
+The return value includes `timeline_path`, `preview_path`, `report_path`, and
+`report`. The same report is saved as
+`projects/<project>/analysis/rough_cut_report.json`. It contains scene order,
+requested and rounded durations, each selected clip's source ID and interval,
+placement, component scores, selection reason, reuse reason, skipped-source
+warnings, the scoring/selection policies, preview metadata, and backup path.
+A timeline SHA-256 ties the report to the exact saved edit; subsequent manual
+edits make the report historical until a new rough cut is built.
+
+Tests generate small colored videos with audio tones and exercise the full
+script → analysis → ranking → selection → saved timeline → preview pipeline.
+They verify duration/codecs with ffprobe, source hashes, story order, distinct
+high-quality choices, required reuse, range validation, and failure recovery.

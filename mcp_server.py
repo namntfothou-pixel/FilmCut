@@ -13,6 +13,7 @@ from services import project_service, timeline_service, music_service, sfx_servi
 from services import analysis_service
 from services import script_service
 from services import matching_service
+from services import rough_cut_service
 from analysis.provider import AnalysisProvider, SuppliedAnalysisProvider
 from analysis.script_provider import ScriptAnalysisProvider
 
@@ -330,6 +331,19 @@ def build_server(projects_root: Path | None = None, sfx_library_root: Path | Non
         """Return explained candidates for every saved scene in story order; no editing."""
         result = require_project(project)
         return _success(matching_service.rank_sources_for_script(result.project_path, limit))
+
+    @server.tool(structured_output=True)
+    @_guard
+    def build_rough_cut(project: str) -> dict[str, Any]:
+        """Build a video-only rough cut from saved script/analyses and render a preview.
+
+        Follow story order, prefer ranked unused sources, use frame-aligned
+        usable intervals, and fill scene durations. Cut transitions only.
+        Replaces the timeline after successful staged rendering, with history.
+        Returns an edit-decision report; no automatic music, SFX or subtitles.
+        """
+        result = require_project(project)
+        return _success(rough_cut_service.build_rough_cut(result.project_path))
 
     return server
 

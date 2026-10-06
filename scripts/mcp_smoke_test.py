@@ -22,7 +22,7 @@ TOOLS = {"ping", "create_project", "get_project", "analyze_folder", "get_timelin
          "add_music", "remove_music", "update_music", "add_sfx", "remove_sfx", "update_sfx",
          "list_sfx_library", "search_sfx_by_tags", "generate_subtitles", "set_transition",
          "set_j_cut", "set_l_cut", "reset_audio_offset", "analyze_source", "get_source_analysis",
-         "analyze_script", "get_script_breakdown", "find_candidates_for_scene", "rank_sources_for_script"}
+         "analyze_script", "get_script_breakdown", "find_candidates_for_scene", "rank_sources_for_script", "build_rough_cut"}
 
 
 async def run_smoke_test(configuration=None):
@@ -187,13 +187,20 @@ async def run_smoke_test(configuration=None):
                 (project / "timeline.json").unlink()
                 recreated = await call("create_timeline", {"project": "Smoke"})
                 assert recreated["data"]["created"]
+                await call("analyze_script", {"project": "Smoke", "script":
+                    "SCENE 1\nAction: Mai opens letter\nDuration: 0.5"})
+                await call("analyze_source", {**source_args, "analysis":
+                    {**observations, "action": "Mai opens letter", "visual_quality": "sharp"}})
+                rough = await call("build_rough_cut", {"project": "Smoke"})
+                assert rough["data"]["report"]["frames"] == 12
+                assert Path(rough["data"]["preview_path"]).is_file()
                 malformed = await session.call_tool("get_project", {})
                 assert malformed.isError  # SDK argument validation error, process stays alive.
                 await call("ping")
                 return {"status": "PASS", "transport": "stdio", "tools": sorted(tools),
                         "project_error_recovery": "PASS", "preview_render": "PASS", "timeline_editing": "PASS",
                         "music_mixing": "PASS", "sfx_mixing": "PASS", "sfx_library": "PASS",
-                        "subtitle_error_recovery": "PASS", "transitions": "PASS", "audio_offsets": "PASS"}
+                        "subtitle_error_recovery": "PASS", "transitions": "PASS", "audio_offsets": "PASS", "rough_cut": "PASS"}
 
 
 if __name__ == "__main__":
