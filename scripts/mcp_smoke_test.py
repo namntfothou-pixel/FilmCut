@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import tempfile
+import shutil
 import tomllib
 from datetime import timedelta
 from pathlib import Path
@@ -22,7 +23,8 @@ TOOLS = {"ping", "create_project", "get_project", "analyze_folder", "get_timelin
          "add_music", "remove_music", "update_music", "add_sfx", "remove_sfx", "update_sfx",
          "list_sfx_library", "search_sfx_by_tags", "generate_subtitles", "set_transition",
          "set_j_cut", "set_l_cut", "reset_audio_offset", "analyze_source", "get_source_analysis",
-         "analyze_script", "get_script_breakdown", "find_candidates_for_scene", "rank_sources_for_script", "build_rough_cut"}
+         "analyze_script", "get_script_breakdown", "find_candidates_for_scene", "rank_sources_for_script", "build_rough_cut",
+         "plan_music", "apply_music_plan", "plan_sfx", "apply_sfx_plan"}
 
 
 async def run_smoke_test(configuration=None):
@@ -37,6 +39,11 @@ async def run_smoke_test(configuration=None):
         music = source / "BGM.wav"
         run_ffmpeg(["-n", "-f", "lavfi", "-i", "sine=frequency=960:sample_rate=44100", "-t", "0.2",
                     "-c:a", "pcm_s16le", str(music)])
+        music_library = root / "music library"
+        music_library.mkdir()
+        shutil.copyfile(music, music_library / "bed.wav")
+        (music_library / "library.json").write_text(json.dumps({"version": 1, "items": [
+            {"id": "bed", "file": "bed.wav", "tags": ["ambient", "neutral", "tense", "suspense"]}]}), encoding="utf-8")
         (source / "broken.mov").write_bytes(b"invalid media")
         library = root / "sfx library"
         (library / "audio").mkdir(parents=True)
@@ -51,7 +58,7 @@ async def run_smoke_test(configuration=None):
         params = StdioServerParameters(command=settings["command"], args=settings["args"],
                                        cwd=settings["cwd"], env={**os.environ, **settings.get("env", {}),
                                        "FILMCUT_PROJECTS_ROOT": str(root / "projects"),
-                                       "FILMCUT_SFX_LIBRARY": str(library)})
+                                       "FILMCUT_SFX_LIBRARY": str(library), "FILMCUT_MUSIC_LIBRARY": str(music_library)})
         async with stdio_client(params) as (reader, writer):
             async with ClientSession(reader, writer) as session:
                 await session.initialize()
@@ -194,13 +201,21 @@ async def run_smoke_test(configuration=None):
                 rough = await call("build_rough_cut", {"project": "Smoke"})
                 assert rough["data"]["report"]["frames"] == 12
                 assert Path(rough["data"]["preview_path"]).is_file()
+                await call("plan_music", {"project": "Smoke"})
+                await call("plan_sfx", {"project": "Smoke", "intents": [
+                    {"event": "body impact", "timestamp": 0.1, "tags": ["body", "impact"], "intensity": 0.5}]})
+                await call("apply_music_plan", {"project": "Smoke"})
+                await call("apply_sfx_plan", {"project": "Smoke"})
+                sounded = await call("render_preview", {"project": "Smoke"})
+                assert abs(sounded["data"]["metadata"]["duration"] - 0.5) < 0.07
                 malformed = await session.call_tool("get_project", {})
                 assert malformed.isError  # SDK argument validation error, process stays alive.
                 await call("ping")
                 return {"status": "PASS", "transport": "stdio", "tools": sorted(tools),
                         "project_error_recovery": "PASS", "preview_render": "PASS", "timeline_editing": "PASS",
                         "music_mixing": "PASS", "sfx_mixing": "PASS", "sfx_library": "PASS",
-                        "subtitle_error_recovery": "PASS", "transitions": "PASS", "audio_offsets": "PASS", "rough_cut": "PASS"}
+                        "subtitle_error_recovery": "PASS", "transitions": "PASS", "audio_offsets": "PASS", "rough_cut": "PASS",
+                        "sound_director": "PASS"}
 
 
 if __name__ == "__main__":

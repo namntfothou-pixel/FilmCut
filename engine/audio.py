@@ -98,6 +98,8 @@ def prepare_music(item, folder: Path, video_duration: float, workspace: Path, in
         return None
     info = validate_music_source(item, folder)
     duration = video_duration - item.timeline_start if item.loop else min(item.duration, video_duration - item.timeline_start)
+    if item.end is not None:
+        duration = min(duration, item.end - item.timeline_start)
     segment = workspace / f"music-{index}-segment.wav"
     prepared = workspace / f"music-{index}-prepared.wav"
     run_ffmpeg(["-n", "-ss", f"{item.source_in:.12g}", "-i", info["path"], "-map", "0:a:0",

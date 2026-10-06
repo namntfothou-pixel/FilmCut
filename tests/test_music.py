@@ -142,7 +142,8 @@ def test_music_crud_history_and_canonical_fields(music_project, music_sources):
     added = add_music(music_project, str(music_sources[1]), loop=True, fade_in=0.3, fade_out=0.3)
     assert Path(added["backup_path"]).read_bytes() == previous
     item = added["music"]
-    assert set(item) == {"id", "file", "timeline_start", "source_in", "source_out", "volume_db", "fade_in", "fade_out", "loop", "enabled"}
+    assert set(item) == {"id", "file", "timeline_start", "end", "source_in", "source_out", "volume_db", "fade_in", "fade_out", "loop", "enabled"}
+    assert item['end'] is None
     assert item["source_out"] == pytest.approx(0.5, abs=0.001)
     previous = (music_project / "timeline.json").read_bytes()
     updated = update_music(music_project, added["music_id"], volume_db=-24, enabled=False)

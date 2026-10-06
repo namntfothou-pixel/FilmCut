@@ -26,7 +26,9 @@ clip; preserve video frame timing. Do not add flashy transitions. Final exports 
 implemented. Whisper defaults to multilingual tiny on
 CPU/int8, loads only on transcription requests, and supports a local model path.
 Do not download large models by default or add advanced subtitle styling.
-Do not implement automatic music selection or AI SFX detection.
+Sound Director may propose existing local audio assets and apply saved plans
+only through explicit plan/apply tools. Mark inferred SFX timing approximate;
+never claim precise event detection from untimed action prose.
 MCP stdout is reserved for protocol messages; log to stderr.
 
 Semantic source analysis lives in `analysis/`, `schemas/source_analysis.py`, and
@@ -34,5 +36,5 @@ Semantic source analysis lives in `analysis/`, `schemas/source_analysis.py`, and
 model providers abstract and injectable. Save observations under each project's
 `analysis/` directory. Analysis and ranking never edit timelines; only the
 explicit rough-cut service may turn their results into a timeline. Keep its
-selection policy separate from the deterministic renderer. Do not add music
-or SFX automatically.
+selection policy separate from the deterministic renderer. Rough cuts do not
+add music or SFX; separate Sound Director apply operations may add them.

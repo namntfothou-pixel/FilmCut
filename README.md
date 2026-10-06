@@ -249,7 +249,7 @@ Run the standalone official-SDK client test from the repository root:
 ```
 
 It launches a real server process, performs initialization and tool discovery,
-calls all thirty-two tools, tests recovery after project and argument errors, and
+calls all thirty-six tools, tests recovery after project and argument errors, and
 renders synthetic media through MCP. Its temporary project storage is isolated
 using `FILMCUT_PROJECTS_ROOT` and `FILMCUT_SFX_LIBRARY`; real projects and the
 local asset catalog are untouched. On Linux use
@@ -886,3 +886,108 @@ Tests generate small colored videos with audio tones and exercise the full
 script → analysis → ranking → selection → saved timeline → preview pipeline.
 They verify duration/codecs with ffprobe, source hashes, story order, distinct
 high-quality choices, required reuse, range validation, and failure recovery.
+
+## Sound Director
+
+Four MCP tools keep planning separate from timeline execution:
+
+- `plan_music(project, intents=None)`
+- `plan_sfx(project, intents=None)`
+- `apply_music_plan(project)`
+- `apply_sfx_plan(project)`
+
+Planning reads the script breakdown, valid source analyses, current video
+clips, and existing tagged local libraries. It writes a validated `SoundPlan`
+to `projects/<project>/analysis/sound_plan.json` and returns it. Planning never
+edits the timeline, creates audio, invokes a model, or downloads files.
+Application reads the saved plan, revalidates its assets, and saves visible
+`MusicClip`/`SFXClip` entries through the shared timeline lock, validation, and
+exact-JSON history. Render afterward with `render_preview(project)`.
+
+Music decisions contain `mood`, energy [0,1], `start`, `end`,
+`recommended_tags`, `ducking`, `fade_in`, and `fade_out`. SFX decisions contain
+`event`, `timestamp`, `tags`, and intensity [0,1]. Every decision also records an
+ID, selected asset ID/file, tag-coverage score, and explanation. SFX decisions
+state whether timing is `exact` or `approximate`.
+
+The default planner uses small, explicit rules in
+`analysis/sound_director.py`. Anxious/scared emotions suggest tense/suspense;
+anger suggests intense action; sadness suggests reflective music; happiness or
+relief suggests hopeful/warm; otherwise ambient/neutral. Energy describes
+intent, while asset selection uses tags. Rough-cut report associations are used
+only when they still match clip/source trim and placement. Otherwise scene
+association is inferred through the existing lexical matcher and flagged for
+review. This is an offline heuristic director, not a claim that a model has
+watched or acoustically analyzed footage.
+
+Default SFX rules recognize body impacts against walls, doors opening/closing,
+footsteps, and breaking glass in English action descriptions. Untimed prose
+cannot establish exactly when an event happens in a shot. Default cues therefore
+use shot onset and report approximate timing. Supply exact intents from a user
+or a future model/provider for synchronized work, for example:
+
+```json
+{
+  "event": "body hits concrete wall",
+  "timestamp": 12.42,
+  "tags": ["body", "impact", "concrete", "heavy"],
+  "intensity": 0.9,
+  "timing": "exact"
+}
+```
+
+Pass a list of these objects as `intents` to `plan_sfx`. Music intents use the
+music fields above and optional `ducking` of
+`{"enabled": true, "attenuation_db": -6, "mode": "cue_gain"}`.
+`MusicIntent.model_json_schema()` and `SFXIntent.model_json_schema()` expose
+provider-neutral contracts: any future model can return these intents, while
+FilmCut still chooses and validates the local files itself. Supplied intents
+replace that section of the plan and do not invent media paths. Timestamps must
+lie inside the current video duration; music cues must not overlap.
+
+Music uses `assets/music/library.json`, with the same version-1 entry format as
+the SFX catalog: `id`, relative `file`, `tags`, optional `description`. Existing
+SFX assets use `assets/sfx/library.json`. Catalog paths stay inside their
+library directory. Assets must exist and contain a valid audio stream.
+Matching scores required-tag coverage, accepts a positive partial match, and
+breaks ties by asset ID; explanations show matched tags. Missing/broken files
+are reported. No matching file produces an unresolved decision. Apply rejects
+unresolved or unavailable decisions before modifying any timeline.
+The shipped catalogs are empty: register your existing files and tags before
+using them. Override roots with `FILMCUT_MUSIC_LIBRARY` and
+`FILMCUT_SFX_LIBRARY`, or inject roots into `build_server` for tests.
+
+Ducking is explicit **cue-wide gain attenuation**, not a dynamic sidechain or
+word-level dialogue detector. Dialogue-bearing or conservatively audio-bearing
+clips enable it by default. Application uses a -18 dB music base plus the
+configured attenuation (default -6 dB), recorded as `volume_db: -24` in the
+music entry. Original source audio gain is preserved. Music loops within each
+planned cue and fades at its endpoints. `MusicClip.end` is an optional absolute
+timeline endpoint; legacy music with `end: null` keeps its prior behavior.
+The deterministic audio engine only gained this bounded playback endpoint.
+
+SFX intensity maps to `-30 + 24 × intensity` dB, with zero intensity muted at
+-120 dB. Events are trimmed to video end and receive short click-prevention
+fades. Their file, timestamp, trim, tags, gain, and enabled state are visible in
+`timeline.json`. The existing mixer sums simultaneous events and limits peaks.
+Automatic entries use the reserved `sound-director-` ID namespace. Application
+replaces only that kind of director-owned entries; manual tracks and the other
+sound kind survive. Reapplying an unchanged plan is idempotent and creates no
+extra events or history entry. Explicit reapplication overwrites manual edits
+to director-owned entries; use separate manual IDs for lasting overrides.
+
+The plan fingerprints all non-director timeline content. Video or manual-audio
+changes require replanning. Music and SFX can be planned together and applied
+in either order, because their own inserted entries do not invalidate the
+shared plan. Replanning after a changed timeline starts a fresh SoundPlan.
+Each section retains its own current warnings. Applying never silently fills
+an unresolved cue from an unrelated asset, and changed library tag matches
+require replanning.
+
+Tests use synthetic existing audio files and footage. They verify that planning
+changes no timeline/audio files, both apply tools back up edits, repeated apply
+is idempotent, manual music survives, stale/missing assets fail atomically,
+and a literal 12.42-second SFX entry appears in the timeline. A real preview
+test checks music endpoint timing and SFX placement through spectral tone
+measurements, preserves dialogue level, and verifies H.264/AAC/48 kHz output
+with ffprobe. The stdio smoke test exercises all four tools and renders the mix.

@@ -25,13 +25,13 @@ def _music_edit(project, operation, change):
 
 def add_music(project, file: str, timeline_start: float = 0, source_in: float = 0,
               source_out: float | None = None, volume_db: float = -18, fade_in: float = 0,
-              fade_out: float = 0, loop: bool = False, enabled: bool = True):
+              fade_out: float = 0, loop: bool = False, enabled: bool = True, end: float | None = None):
     def change(timeline, folder):
         path = _native_path(file)
         info = probe_audio(path if path.is_absolute() else folder / path)
         item = MusicClip(id=f"music-{uuid4().hex}", file=file, timeline_start=timeline_start,
                          source_in=source_in, source_out=info["duration"] if source_out is None else source_out,
-                         volume_db=volume_db, fade_in=fade_in, fade_out=fade_out, loop=loop, enabled=enabled)
+                         volume_db=volume_db, fade_in=fade_in, fade_out=fade_out, loop=loop, enabled=enabled, end=end)
         validate_music_source(item, folder)
         if len(timeline.music_tracks) > 1:
             raise TimelineError("ambiguous_music_track", "add_music requires zero or one music track")
@@ -51,7 +51,7 @@ def remove_music(project, music_id: str):
 
 
 def update_music(project, music_id: str, **changes):
-    allowed = {"file", "timeline_start", "source_in", "source_out", "volume_db", "fade_in", "fade_out", "loop", "enabled"}
+    allowed = {"file", "timeline_start", "source_in", "source_out", "volume_db", "fade_in", "fade_out", "loop", "enabled", "end"}
     if set(changes) - allowed:
         raise TimelineError("invalid_music_update", "Only editable music fields may be updated")
     def change(timeline, folder):

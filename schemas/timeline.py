@@ -92,6 +92,7 @@ class MusicClip(IntentModel):
     id: Identifier
     file: Identifier = Field(validation_alias=AliasChoices("file", "source"))
     timeline_start: Timestamp = 0
+    end: Positive | None = None  # Explicit cue endpoint, including looped music.
     source_in: Timestamp = 0
     source_out: Positive
     volume_db: Annotated[float, Field(ge=-120, le=60, allow_inf_nan=False)] = -18
@@ -120,6 +121,12 @@ class MusicClip(IntentModel):
             raise ValueError("Music requires a nonempty file and source_out > source_in")
         if not math.isfinite(self.timeline_end):
             raise ValueError("Music timeline end must be finite")
+        if self.end is not None:
+            span = self.end - self.timeline_start
+            if span <= 0 or self.fade_in + self.fade_out > span + 1e-9:
+                raise ValueError("Music end/fades must fit its timeline cue")
+            if not self.loop and span > self.duration + 1e-9:
+                raise ValueError("Non-looped music end exceeds its source interval")
         if not self.loop and self.fade_in + self.fade_out > self.duration:
             raise ValueError("Music fades exceed its playback duration")
         return self
@@ -134,7 +141,7 @@ class MusicClip(IntentModel):
 
     @property
     def timeline_end(self):
-        return self.timeline_start + self.duration
+        return self.end if self.end is not None else self.timeline_start + self.duration
 
 
 class SFXClip(IntentModel):
@@ -345,7 +352,7 @@ class Timeline(IntentModel):
         def no_overlaps(items):
             active = sorted((item for item in items if item.enabled), key=lambda item: item.timeline_start)
             for previous, current in zip(active, active[1:]):
-                end = max(previous.timeline_start, video_end) if isinstance(previous, MusicClip) and previous.loop else previous.timeline_end
+                end = max(previous.timeline_start, min(video_end, previous.end) if previous.end is not None else video_end) if isinstance(previous, MusicClip) and previous.loop else previous.timeline_end
                 if current.timeline_start < end - 1e-9:
                     raise ValueError(f"prohibited overlap: {previous.id} and {current.id}")
 

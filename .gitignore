@@ -32,6 +32,8 @@ Desktop.ini
 !/projects/.gitkeep
 /assets/music/*
 !/assets/music/.gitkeep
+!/assets/music/library.json
+!/assets/music/README.md
 /assets/sfx/*
 !/assets/sfx/.gitkeep
 !/assets/sfx/README.md

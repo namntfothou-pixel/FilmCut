@@ -14,6 +14,7 @@ from services import analysis_service
 from services import script_service
 from services import matching_service
 from services import rough_cut_service
+from services import sound_service
 from analysis.provider import AnalysisProvider, SuppliedAnalysisProvider
 from analysis.script_provider import ScriptAnalysisProvider
 
@@ -51,7 +52,8 @@ def _guard(function):
 
 def build_server(projects_root: Path | None = None, sfx_library_root: Path | None = None,
                  *, analysis_provider: AnalysisProvider | None = None,
-                 script_provider: ScriptAnalysisProvider | None = None) -> FastMCP:
+                 script_provider: ScriptAnalysisProvider | None = None,
+                 music_library_root: Path | None = None) -> FastMCP:
     """Allow an isolated project root for tests, using the same existing services."""
     server = FastMCP("FilmCut", log_level="WARNING", instructions=(
         "Local video editing engine. Project arguments are project names. "
@@ -188,11 +190,11 @@ def build_server(projects_root: Path | None = None, sfx_library_root: Path | Non
     @_guard
     def add_music(project: str, file: str, timeline_start: float = 0, source_in: float = 0,
                   source_out: float | None = None, volume_db: float = -18, fade_in: float = 0,
-                  fade_out: float = 0, loop: bool = False, enabled: bool = True) -> dict[str, Any]:
-        """Manually add BGM; loop repeats its selected interval to video end."""
+                  fade_out: float = 0, loop: bool = False, enabled: bool = True, end: float | None = None) -> dict[str, Any]:
+        """Manually add BGM; loop to video end or optional explicit end timestamp."""
         result = require_project(project)
         return _success(music_service.add_music(result.project_path, file, timeline_start, source_in,
-                                               source_out, volume_db, fade_in, fade_out, loop, enabled))
+                                               source_out, volume_db, fade_in, fade_out, loop, enabled, end))
 
     @server.tool(structured_output=True)
     @_guard
@@ -207,12 +209,12 @@ def build_server(projects_root: Path | None = None, sfx_library_root: Path | Non
                      timeline_start: float | None = None, source_in: float | None = None,
                      source_out: float | None = None, volume_db: float | None = None,
                      fade_in: float | None = None, fade_out: float | None = None,
-                     loop: bool | None = None, enabled: bool | None = None) -> dict[str, Any]:
+                     loop: bool | None = None, enabled: bool | None = None, end: float | None = None) -> dict[str, Any]:
         """Update only supplied music fields; validate, back up and save."""
         result = require_project(project)
         return _success(music_service.update_music(result.project_path, music_id, file=file,
             timeline_start=timeline_start, source_in=source_in, source_out=source_out,
-            volume_db=volume_db, fade_in=fade_in, fade_out=fade_out, loop=loop, enabled=enabled))
+            volume_db=volume_db, fade_in=fade_in, fade_out=fade_out, loop=loop, enabled=enabled, end=end))
 
     @server.tool(structured_output=True)
     @_guard
@@ -345,6 +347,44 @@ def build_server(projects_root: Path | None = None, sfx_library_root: Path | Non
         result = require_project(project)
         return _success(rough_cut_service.build_rough_cut(result.project_path))
 
+    @server.tool(structured_output=True)
+    @_guard
+    def plan_music(project: str, intents: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        """Save music intent and tag-matched local files in SoundPlan; no timeline changes.
+
+        Optional provider-neutral intents use mood, energy, start/end, recommended_tags,
+        ducking {enabled, attenuation_db, mode: cue_gain}, fade_in/out.
+        Ducking is a static gain reduction for the cue, not inferred word timing.
+        """
+        result = require_project(project)
+        return _success(sound_service.plan_music(result.project_path, library_root=music_library_root, intents=intents))
+
+    @server.tool(structured_output=True)
+    @_guard
+    def apply_music_plan(project: str) -> dict[str, Any]:
+        """Validate saved plan/assets and apply visible music entries with timeline history."""
+        result = require_project(project)
+        return _success(sound_service.apply_music_plan(result.project_path, library_root=music_library_root))
+
+    @server.tool(structured_output=True)
+    @_guard
+    def plan_sfx(project: str, intents: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        """Save SFX decisions choosing existing tagged files. No audio generation.
+
+        Optional intents: event, timestamp, tags, intensity [0,1], timing exact/approximate.
+        Default action rules mark shot-onset timing approximate; supply exact
+        timestamped intents for precise sync. Does not modify timeline.json.
+        """
+        result = require_project(project)
+        return _success(sound_service.plan_sfx(result.project_path, library_root=sfx_library_root, intents=intents))
+
+    @server.tool(structured_output=True)
+    @_guard
+    def apply_sfx_plan(project: str) -> dict[str, Any]:
+        """Validate saved plan/assets and apply visible SFX entries with timeline history."""
+        result = require_project(project)
+        return _success(sound_service.apply_sfx_plan(result.project_path, library_root=sfx_library_root))
+
     return server
 
 
@@ -352,4 +392,6 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.WARNING)  # Logging goes to stderr.
     root = os.environ.get("FILMCUT_PROJECTS_ROOT")
     library = os.environ.get("FILMCUT_SFX_LIBRARY")
-    build_server(Path(root) if root else None, Path(library) if library else None).run(transport="stdio")
+    music = os.environ.get("FILMCUT_MUSIC_LIBRARY")
+    build_server(Path(root) if root else None, Path(library) if library else None,
+                 music_library_root=Path(music) if music else None).run(transport="stdio")
