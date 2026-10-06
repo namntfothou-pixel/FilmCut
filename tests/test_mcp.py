@@ -19,8 +19,9 @@ def test_standalone_stdio_smoke_test():
     payload = json.loads(result.stdout)
     assert payload["status"] == "PASS"
     assert payload["preview_render"] == "PASS"
-    assert len(payload["tools"]) == 12
+    assert len(payload["tools"]) == 15
     assert payload["timeline_editing"] == "PASS"
+    assert payload["music_mixing"] == "PASS"
 
 
 def test_unexpected_service_failure_is_contained(tmp_path, monkeypatch):

@@ -80,7 +80,7 @@ def validate_timeline(timeline: Timeline | dict, *, base_dir: str | Path | None 
     for collection in ("video_tracks", "audio_tracks", "music_tracks", "sfx_tracks"):
         for track_index, track in enumerate(getattr(parsed, collection)):
             for clip_index, clip in enumerate(track.clips):
-                location = [collection, track_index, "clips", clip_index, "source"]
+                location = [collection, track_index, "clips", clip_index, "file" if collection == "music_tracks" else "source"]
                 try:
                     path = _native_path(clip.source)
                     if not path.is_absolute():

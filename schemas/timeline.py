@@ -3,7 +3,7 @@
 import math
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 from schemas.project import validate_project_name
 
@@ -49,8 +49,55 @@ class VideoClip(AudioClip):
     """Video trim, placement, playback rate, and original audio volume."""
 
 
-class MusicClip(AudioClip):
-    """Music placement; volume is a linear gain, not a filter expression."""
+class MusicClip(IntentModel):
+    """Manual music intent; a loop repeats the selected source interval."""
+
+    id: Identifier
+    file: Identifier = Field(validation_alias=AliasChoices("file", "source"))
+    timeline_start: Timestamp = 0
+    source_in: Timestamp = 0
+    source_out: Positive
+    volume_db: Annotated[float, Field(ge=-120, le=60, allow_inf_nan=False)] = -18
+    fade_in: Timestamp = 0
+    fade_out: Timestamp = 0
+    loop: bool = False
+    enabled: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def legacy_fields(cls, value):
+        if isinstance(value, dict):
+            value = dict(value)
+            if "volume" in value:
+                gain = value.pop("volume")
+                if "volume_db" in value or not isinstance(gain, (int, float)) or not math.isfinite(gain) or gain < 0:
+                    raise ValueError("Invalid or conflicting legacy music volume")
+                value["volume_db"] = 20 * math.log10(gain) if gain else -120
+            if "speed" in value and value.pop("speed") != 1:
+                raise ValueError("Music speed changes are not supported")
+        return value
+
+    @model_validator(mode="after")
+    def valid_interval(self):
+        if self.source_out <= self.source_in or not self.file.strip():
+            raise ValueError("Music requires a nonempty file and source_out > source_in")
+        if not math.isfinite(self.timeline_end):
+            raise ValueError("Music timeline end must be finite")
+        if not self.loop and self.fade_in + self.fade_out > self.duration:
+            raise ValueError("Music fades exceed its playback duration")
+        return self
+
+    @property
+    def source(self):
+        return self.file
+
+    @property
+    def duration(self):
+        return self.source_out - self.source_in
+
+    @property
+    def timeline_end(self):
+        return self.timeline_start + self.duration
 
 
 class SFXClip(AudioClip):
@@ -128,10 +175,13 @@ class Timeline(IntentModel):
                 raise ValueError(f"duplicate timeline identifier: {identifier}")
             seen.add(identifier)
 
+        video_end = max((clip.timeline_end for track in self.video_tracks for clip in track.clips if clip.enabled), default=0)
+
         def no_overlaps(items):
             active = sorted((item for item in items if item.enabled), key=lambda item: item.timeline_start)
             for previous, current in zip(active, active[1:]):
-                if current.timeline_start < previous.timeline_end - 1e-9:
+                end = max(previous.timeline_start, video_end) if isinstance(previous, MusicClip) and previous.loop else previous.timeline_end
+                if current.timeline_start < end - 1e-9:
                     raise ValueError(f"prohibited overlap: {previous.id} and {current.id}")
 
         for track in [*self.video_tracks, *self.audio_tracks, *self.music_tracks, *self.sfx_tracks, *self.subtitle_tracks]:

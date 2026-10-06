@@ -10,7 +10,7 @@ from engine.ffmpeg import FFmpegError, run_ffmpeg
 from engine.media import probe_media
 from engine.render import RenderError, render_clip, render_timeline, render_video_track
 from engine.timeline import load_timeline, save_timeline
-from schemas.timeline import MusicClip, MusicTrack, VideoClip, VideoTrack
+from schemas.timeline import AudioClip, AudioTrack, VideoClip, VideoTrack
 from services.project_service import create_project
 
 
@@ -108,7 +108,7 @@ def test_render_clip_and_video_track(render_project):
 
 
 @pytest.mark.parametrize("change,code", [("speed", "unsupported_speed"), ("gap", "unsupported_placement"),
-    ("music", "unsupported_tracks"), ("multi", "unsupported_track_count"),
+    ("audio", "unsupported_tracks"), ("multi", "unsupported_track_count"),
     ("empty", "unsupported_track_count"), ("settings", "settings_mismatch")])
 def test_unsupported_intent_is_explicit(render_project, change, code):
     timeline = load_timeline(render_project)
@@ -117,8 +117,8 @@ def test_unsupported_intent_is_explicit(render_project, change, code):
         timeline.video_tracks[0].clips[1].timeline_start = 0.5
     elif change == "gap":
         timeline.video_tracks[0].clips[1].timeline_start = 2
-    elif change == "music":
-        timeline.music_tracks = [MusicTrack(id="music", clips=[MusicClip(id="song", source=timeline.video_tracks[0].clips[0].source, source_out=1)])]
+    elif change == "audio":
+        timeline.audio_tracks = [AudioTrack(id="dialogue", clips=[AudioClip(id="speech", source=timeline.video_tracks[0].clips[0].source, source_out=1)])]
     elif change == "multi":
         timeline.video_tracks.append(VideoTrack(id="other", clips=[VideoClip(id="other-clip", source=timeline.video_tracks[0].clips[0].source, source_out=1)]))
     elif change == "empty":

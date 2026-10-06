@@ -16,5 +16,6 @@ that virtual environment. Keep source media unchanged and generated files out
 of Git. Project creation, media analysis, and timeline intent models are
 implemented, along with single-track video preview rendering and a FastMCP
 stdio adapter with non-destructive video-clip editing and timeline history.
-Music, SFX, subtitles, transitions, and final exports are not
-rendered yet. MCP stdout is reserved for protocol messages; log to stderr.
+Manual music editing and BGM mixing are implemented. SFX, subtitles, transitions,
+and final exports are not rendered yet. Do not implement automatic music selection.
+MCP stdout is reserved for protocol messages; log to stderr.

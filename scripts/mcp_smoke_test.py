@@ -18,7 +18,8 @@ from mcp.client.stdio import stdio_client
 
 from engine.ffmpeg import run_ffmpeg
 TOOLS = {"ping", "create_project", "get_project", "analyze_folder", "get_timeline", "create_timeline", "render_preview",
-         "add_clip", "remove_clip", "trim_clip", "move_clip", "set_clip_speed"}
+         "add_clip", "remove_clip", "trim_clip", "move_clip", "set_clip_speed",
+         "add_music", "remove_music", "update_music"}
 
 
 async def run_smoke_test(configuration=None):
@@ -27,8 +28,12 @@ async def run_smoke_test(configuration=None):
         source = root / "source media"
         source.mkdir()
         video = source / "synthetic.mp4"
-        run_ffmpeg(["-n", "-f", "lavfi", "-i", "testsrc2=size=160x120:rate=24", "-t", "0.5",
-                    "-c:v", "mpeg4", "-threads", "1", str(video)])
+        run_ffmpeg(["-n", "-f", "lavfi", "-i", "testsrc2=size=160x120:rate=24", "-f", "lavfi", "-i",
+                    "sine=frequency=480:sample_rate=48000", "-t", "0.5",
+                    "-c:v", "mpeg4", "-threads", "1", "-c:a", "aac", str(video)])
+        music = source / "BGM.wav"
+        run_ffmpeg(["-n", "-f", "lavfi", "-i", "sine=frequency=960:sample_rate=44100", "-t", "0.2",
+                    "-c:a", "pcm_s16le", str(music)])
         (source / "broken.mov").write_bytes(b"invalid media")
         settings = configuration or {"command": sys.executable,
                                      "args": [str(REPOSITORY / "mcp_server.py")], "cwd": str(REPOSITORY)}
@@ -86,6 +91,11 @@ async def run_smoke_test(configuration=None):
                 before = (project / "timeline.json").read_bytes()
                 await call("create_timeline", {"project": "Smoke"})
                 assert (project / "timeline.json").read_bytes() == before
+                added_music = await call("add_music", {"project": "Smoke", "file": str(music), "loop": True,
+                                                       "volume_db": -12, "fade_in": 0.05, "fade_out": 0.05})
+                music_id = added_music["data"]["music_id"]
+                await call("update_music", {"project": "Smoke", "music_id": music_id, "volume_db": -18})
+                await call("update_music", {"project": "Smoke", "music_id": music_id, "fade_in": -1}, success=False)
                 rendered = await call("render_preview", {"project": "Smoke"})
                 data = rendered["data"]
                 assert Path(data["preview_path"]).is_file()
@@ -93,6 +103,7 @@ async def run_smoke_test(configuration=None):
                 assert data["metadata"]["audio_codec"] == "aac"
                 assert data["metadata"]["sample_rate"] == 48000
                 assert abs(data["metadata"]["duration"] - 0.5) < 0.07
+                await call("remove_music", {"project": "Smoke", "music_id": music_id})
                 await call("remove_clip", {"project": "Smoke", "clip_id": clip_id})
                 removed = await call("get_timeline", {"project": "Smoke"})
                 assert not removed["data"]["timeline"]["video_tracks"][0]["clips"]
@@ -104,7 +115,8 @@ async def run_smoke_test(configuration=None):
                 assert malformed.isError  # SDK argument validation error, process stays alive.
                 await call("ping")
                 return {"status": "PASS", "transport": "stdio", "tools": sorted(tools),
-                        "project_error_recovery": "PASS", "preview_render": "PASS", "timeline_editing": "PASS"}
+                        "project_error_recovery": "PASS", "preview_render": "PASS", "timeline_editing": "PASS",
+                        "music_mixing": "PASS"}
 
 
 if __name__ == "__main__":

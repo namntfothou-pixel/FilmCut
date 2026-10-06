@@ -9,7 +9,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from engine import media, render, timeline
-from services import project_service, timeline_service
+from services import project_service, timeline_service, music_service
 
 logger = logging.getLogger("filmcut.mcp")
 
@@ -152,6 +152,36 @@ def build_server(projects_root: Path | None = None) -> FastMCP:
         """Set positive playback speed in timeline intent; do not render media."""
         result = require_project(project)
         return _success(timeline_service.set_clip_speed(result.project_path, clip_id, speed))
+
+    @server.tool(structured_output=True)
+    @_guard
+    def add_music(project: str, file: str, timeline_start: float = 0, source_in: float = 0,
+                  source_out: float | None = None, volume_db: float = -18, fade_in: float = 0,
+                  fade_out: float = 0, loop: bool = False, enabled: bool = True) -> dict[str, Any]:
+        """Manually add BGM; loop repeats its selected interval to video end."""
+        result = require_project(project)
+        return _success(music_service.add_music(result.project_path, file, timeline_start, source_in,
+                                               source_out, volume_db, fade_in, fade_out, loop, enabled))
+
+    @server.tool(structured_output=True)
+    @_guard
+    def remove_music(project: str, music_id: str) -> dict[str, Any]:
+        """Remove music intent without deleting source media."""
+        result = require_project(project)
+        return _success(music_service.remove_music(result.project_path, music_id))
+
+    @server.tool(structured_output=True)
+    @_guard
+    def update_music(project: str, music_id: str, file: str | None = None,
+                     timeline_start: float | None = None, source_in: float | None = None,
+                     source_out: float | None = None, volume_db: float | None = None,
+                     fade_in: float | None = None, fade_out: float | None = None,
+                     loop: bool | None = None, enabled: bool | None = None) -> dict[str, Any]:
+        """Update only supplied music fields; validate, back up and save."""
+        result = require_project(project)
+        return _success(music_service.update_music(result.project_path, music_id, file=file,
+            timeline_start=timeline_start, source_in=source_in, source_out=source_out,
+            volume_db=volume_db, fade_in=fade_in, fade_out=fade_out, loop=loop, enabled=enabled))
 
     return server
 

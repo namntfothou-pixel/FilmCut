@@ -122,7 +122,7 @@ width, height, and typed `video_tracks`, `audio_tracks`, `music_tracks`,
 `sfx_tracks`, and `subtitle_tracks`. Each track has a unique ID and its own
 clips (or subtitle cues). IDs are unique throughout the timeline.
 
-Video, dialogue, music, and SFX clips use `id`, `source`, `source_in`,
+Video, dialogue, and SFX clips use `id`, `source`, `source_in`,
 `source_out`, `timeline_start`, `enabled`, `volume`, and `speed`. Trim intervals
 are half-open; duration is `(source_out - source_in) / speed`. Volume is a
 nonnegative linear gain (1 is unchanged); speed must be finite and positive.
@@ -189,7 +189,7 @@ clip audio volume is honored. AAC padding is trimmed before concatenation.
 
 This phase supports exactly one enabled video track with normal-speed clips
 placed contiguously from time zero. Gaps, overlapping tracks, speed changes,
-transitions, and active separate audio/music/SFX/subtitle tracks return explicit
+transitions, and active separate audio/SFX/subtitle tracks return explicit
 errors. Odd project dimensions are rejected because this H.264/yuv420p output
 requires even dimensions. Trim endpoints must be within the source duration.
 Frame quantization can change duration by approximately one output frame.
@@ -222,8 +222,9 @@ per-file errors plus `complete=false` on a partial scan. `create_timeline` is
 idempotent: it preserves an existing valid timeline and only initializes a
 missing file. Invalid existing timelines return errors without being reset.
 `render_preview` uses the saved timeline and retains the current render limits.
-Five non-destructive editing tools are also available: `add_clip`, `remove_clip`,
-`trim_clip`, `move_clip`, and `set_clip_speed`.
+Five non-destructive video editing tools are also available: `add_clip`, `remove_clip`,
+`trim_clip`, `move_clip`, and `set_clip_speed`, plus three manual music tools:
+`add_music`, `remove_music`, and `update_music`.
 
 Run the standalone official-SDK client test from the repository root:
 
@@ -232,7 +233,7 @@ Run the standalone official-SDK client test from the repository root:
 ```
 
 It launches a real server process, performs initialization and tool discovery,
-calls all twelve tools, tests recovery after project and argument errors, and
+calls all fifteen tools, tests recovery after project and argument errors, and
 renders synthetic media through MCP. Its temporary project storage is isolated
 using `FILMCUT_PROJECTS_ROOT`; real projects are untouched. On Linux use
 `.venv/bin/python scripts/mcp_smoke_test.py`.
@@ -307,4 +308,47 @@ restore intent; no separate undo/restore MCP tool is added in this phase.
 
 Preview rendering still requires one contiguous track at speed 1. Editing gaps
 or speed changes is supported as intent; rendering those cases remains deferred.
-Music editing is not implemented.
+Manual music editing is described below; automatic music selection is not implemented.
+
+## Manual music and BGM mixing
+
+Music items contain `id`, `file`, `timeline_start`, `source_in`, `source_out`,
+`volume_db`, `fade_in`, `fade_out`, `loop`, and `enabled`. Times are seconds;
+gain is decibels in the range -120 to +60, default -18. Canonical JSON uses
+`file` and `volume_db`. Earlier `source`/linear `volume` fields are accepted and
+converted when saving; legacy music speed must be 1. Source files are never changed.
+
+- `add_music(project, file, timeline_start=0, source_in=0, source_out=None,
+  volume_db=-18, fade_in=0, fade_out=0, loop=False, enabled=True)` adds a manually
+  supplied file. Omitted source_out defaults to its probed audio duration. The
+  service uses the sole music track or creates one; multiple tracks require
+  explicit timeline authoring because this tool has no track argument.
+- `remove_music(project, music_id)` removes only its timeline entry.
+- `update_music(project, music_id, ...)` accepts any of those optional music
+  fields and changes only supplied values, including zero and False.
+
+All three tools use the shared locked, validated transaction with timeline
+backups and structured summaries. Unsupported/corrupt audio and out-of-range
+trims return errors without changing the saved timeline. Music files can use any
+audio format readable by the installed ffprobe/FFmpeg, including WAV and MP3.
+
+A loop repeats the selected source interval until video end, starting at
+timeline_start. Non-looping music ends after that interval. Both are cut at video
+end. Fades apply once to the actual playback start/end, rather than resetting at
+loop boundaries. Fades must fit non-loop playback; when the video truncates the
+music, fade lengths are shortened proportionally to fit the remaining duration.
+Enabled looping music occupies the remainder of the video for same-track
+overlap validation. Music on separate tracks can mix concurrently.
+
+The audio engine prepares floating-point PCM intermediates in the render's
+isolated project cache directory. The original dialogue remains at unity gain;
+there is no automatic ducking or amix normalization. A final peak limiter caps
+the mix at 0.8 before AAC encoding, without automatic gain boost, reserving
+headroom for codec overshoot. High mix levels may trigger dynamic attenuation;
+the tests inspect decoded stereo samples and confirm no clipping for the stress
+fixtures. Audio is stereo AAC at 48000 Hz; H.264 video is copied without another
+video encode. Disabled or out-of-timeline music does not contribute to output.
+
+Real render tests measure source and BGM frequencies, loop persistence, selected
+source intervals, gains, fades, silence when disabled, timeline-end trims, and
+decoded output peaks. No AI music selection is implemented.
