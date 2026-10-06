@@ -28,3 +28,8 @@ CPU/int8, loads only on transcription requests, and supports a local model path.
 Do not download large models by default or add advanced subtitle styling.
 Do not implement automatic music selection or AI SFX detection.
 MCP stdout is reserved for protocol messages; log to stderr.
+
+Semantic source analysis lives in `analysis/`, `schemas/source_analysis.py`, and
+`services/analysis_service.py`, separately from deterministic rendering. Keep
+model providers abstract and injectable. Save observations under each project's
+`analysis/` directory; never automatically edit the timeline from observations.

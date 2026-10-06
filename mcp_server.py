@@ -10,6 +10,8 @@ from mcp.server.fastmcp import FastMCP
 
 from engine import media, render, timeline
 from services import project_service, timeline_service, music_service, sfx_service, subtitle_service
+from services import analysis_service
+from analysis.provider import AnalysisProvider, SuppliedAnalysisProvider
 
 logger = logging.getLogger("filmcut.mcp")
 
@@ -43,7 +45,8 @@ def _guard(function):
     return guarded
 
 
-def build_server(projects_root: Path | None = None, sfx_library_root: Path | None = None) -> FastMCP:
+def build_server(projects_root: Path | None = None, sfx_library_root: Path | None = None,
+                 *, analysis_provider: AnalysisProvider | None = None) -> FastMCP:
     """Allow an isolated project root for tests, using the same existing services."""
     server = FastMCP("FilmCut", log_level="WARNING", instructions=(
         "Local video editing engine. Project arguments are project names. "
@@ -86,6 +89,29 @@ def build_server(projects_root: Path | None = None, sfx_library_root: Path | Non
         scan = media.scan_folder(result.project.source_folder)
         path = media.write_source_index(result.project_path, scan)
         return _success({**scan, "complete": not scan["errors"], "source_index_path": str(path)})
+
+    @server.tool(structured_output=True)
+    @_guard
+    def analyze_source(project: str, source_id: str, analysis: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Save validated semantic observations or request the configured analysis provider.
+
+        Supply all SourceAnalysis fields: source_id, characters, location,
+        shot_size, camera_angle, camera_motion, action, emotion, dialogue,
+        visual_quality, continuity_notes, usable_start, usable_end, problems,
+        description. Characters/notes/problems are string lists; unknown text
+        and both usable bounds may be null. Bounds are source-relative seconds.
+        This never modifies the timeline or renders media.
+        """
+        result = require_project(project)
+        provider = SuppliedAnalysisProvider(analysis) if analysis is not None else analysis_provider
+        return _success(analysis_service.analyze_source(result.project_path, source_id, provider=provider))
+
+    @server.tool(structured_output=True)
+    @_guard
+    def get_source_analysis(project: str, source_id: str) -> dict[str, Any]:
+        """Read saved semantic source metadata without invoking a model."""
+        result = require_project(project)
+        return _success(analysis_service.get_source_analysis(result.project_path, source_id))
 
     @server.tool(structured_output=True)
     @_guard

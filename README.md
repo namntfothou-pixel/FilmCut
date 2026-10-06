@@ -249,7 +249,7 @@ Run the standalone official-SDK client test from the repository root:
 ```
 
 It launches a real server process, performs initialization and tool discovery,
-calls all twenty-five tools, tests recovery after project and argument errors, and
+calls all twenty-seven tools, tests recovery after project and argument errors, and
 renders synthetic media through MCP. Its temporary project storage is isolated
 using `FILMCUT_PROJECTS_ROOT` and `FILMCUT_SFX_LIBRARY`; real projects and the
 local asset catalog are untouched. On Linux use
@@ -631,3 +631,72 @@ configured real model, checks nonempty segments and SRT, renders a captioned
 preview, probes it, and fully decodes it. It may download tiny on first use;
 ordinary pytest uses inference test doubles, with real FFmpeg extraction and
 burn-in, to remain deterministic and network independent.
+
+## Phase 2: semantic source analysis
+
+Semantic observations are separate from ffprobe's technical source index and
+from the deterministic FFmpeg renderer. This phase provides a validated data
+contract, provider interface, persistence service, and two MCP tools. It does
+not select footage or automatically edit a movie. No model SDK, credentials,
+network calls, or model downloads are required.
+
+1. Run `analyze_folder(project)` to populate `source_index.json`.
+2. Use its source IDs with `analyze_source(project, source_id, analysis=None)`.
+   Supply an observation dictionary in `analysis`, or inject an implementation
+   of `AnalysisProvider` into `build_server(analysis_provider=...)`.
+   Without either, the tool returns `analysis_provider_not_configured`.
+3. Read the saved result with `get_source_analysis(project, source_id)`.
+
+Each successful analysis writes readable UTF-8 JSON to
+`projects/<project>/analysis/<source_id>.json`. Reanalysis atomically replaces
+that source's previous observations only after validation. Provider, validation,
+and write failures preserve the previous file. Reading saved observations does
+not invoke a model or require the source media to remain online; it does require
+the project's source index. Analysis never modifies source media, the index,
+`timeline.json`, or rendered output.
+
+`SourceAnalysis` contains all of these required keys:
+
+| Fields | Meaning/type |
+| --- | --- |
+| `source_id` | Exact ID from `source_index.json` |
+| `characters` | List of observed character labels |
+| `location`, `shot_size`, `camera_angle`, `camera_motion` | Descriptive text or `null` |
+| `action`, `emotion`, `dialogue`, `visual_quality` | Descriptive text or `null`; dialogue is observed text, not a generated script |
+| `continuity_notes`, `problems` | Lists of textual observations |
+| `usable_start`, `usable_end` | Source-relative seconds within the indexed duration, or both `null` when no usable range is established |
+| `description` | Overall description or `null` |
+
+Unknown observations should remain `null`; empty lists indicate no reported
+items. Text can be English, Vietnamese, or another language. Usability is
+advisory metadata, never an automatic trim. The schema rejects unknown fields,
+invalid intervals, non-finite timestamps, and unsafe source IDs. The service
+also rejects mismatched IDs and intervals exceeding indexed duration. Rerun
+`analyze_folder` and analysis if the underlying footage changes.
+
+A future local or remote multimodal adapter implements this interface:
+
+```python
+from analysis.provider import SourceContext
+from schemas.source_analysis import SourceAnalysis
+from services.analysis_service import analyze_source
+
+class MyMultimodalProvider:
+    def analyze(self, source: SourceContext) -> SourceAnalysis | dict:
+        # source carries an absolute native Path, ID, duration, dimensions, fps.
+        # Your adapter handles sampling, model invocation, credentials, timeouts.
+        # Ask for the contract exposed by SourceAnalysis.model_json_schema().
+        # Return observations; do not change the source or timeline.
+        raise NotImplementedError("Connect your chosen model here")
+
+# Once the adapter is implemented:
+# analyze_source(project_path, source_id, provider=MyMultimodalProvider())
+```
+
+MCP callers can instead supply observations from their own multimodal workflow;
+`SuppliedAnalysisProvider` routes them through identical service validation.
+The architecture does not claim any real model has analyzed footage yet.
+Mocked tests cover the contract, Unicode persistence, unavailable providers,
+invalid model responses, source lookups, atomic write failures, unchanged
+project/media files, and MCP error recovery. The stdio smoke test also saves
+and retrieves supplied mock observations.

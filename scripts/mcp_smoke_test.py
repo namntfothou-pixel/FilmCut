@@ -21,7 +21,7 @@ TOOLS = {"ping", "create_project", "get_project", "analyze_folder", "get_timelin
          "add_clip", "remove_clip", "trim_clip", "move_clip", "set_clip_speed",
          "add_music", "remove_music", "update_music", "add_sfx", "remove_sfx", "update_sfx",
          "list_sfx_library", "search_sfx_by_tags", "generate_subtitles", "set_transition",
-         "set_j_cut", "set_l_cut", "reset_audio_offset"}
+         "set_j_cut", "set_l_cut", "reset_audio_offset", "analyze_source", "get_source_analysis"}
 
 
 async def run_smoke_test(configuration=None):
@@ -81,6 +81,20 @@ async def run_smoke_test(configuration=None):
                 assert len(analyzed["data"]["sources"]) == 1
                 assert len(analyzed["data"]["errors"]) == 1 and not analyzed["data"]["complete"]
                 assert (project / "source_index.json").is_file()
+                source_id = analyzed["data"]["sources"][0]["id"]
+                source_args = {"project": "Smoke", "source_id": source_id}
+                missing_provider = await call("analyze_source", source_args, success=False)
+                assert missing_provider["error"]["code"] == "analysis_provider_not_configured"
+                observations = {"source_id": source_id, "characters": [], "location": None,
+                    "shot_size": None, "camera_angle": None, "camera_motion": None,
+                    "action": None, "emotion": None, "dialogue": None, "visual_quality": None,
+                    "continuity_notes": [], "usable_start": 0, "usable_end": 1,
+                    "problems": [], "description": "Synthetic test pattern; supplied mock observations"}
+                before_analysis = (project / "timeline.json").read_bytes()
+                await call("analyze_source", {**source_args, "analysis": observations})
+                saved_analysis = await call("get_source_analysis", source_args)
+                assert saved_analysis["data"]["analysis"] == observations
+                assert (project / "timeline.json").read_bytes() == before_analysis
                 await call("get_timeline", {"project": "Smoke"})
                 # No network/model downloads in the general server smoke test.
                 subtitle_error = await call("generate_subtitles", {"project": "Smoke", "language": "invalid"}, success=False)
