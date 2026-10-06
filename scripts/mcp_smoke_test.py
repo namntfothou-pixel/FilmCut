@@ -20,7 +20,7 @@ from engine.ffmpeg import run_ffmpeg
 TOOLS = {"ping", "create_project", "get_project", "analyze_folder", "get_timeline", "create_timeline", "render_preview",
          "add_clip", "remove_clip", "trim_clip", "move_clip", "set_clip_speed",
          "add_music", "remove_music", "update_music", "add_sfx", "remove_sfx", "update_sfx",
-         "list_sfx_library", "search_sfx_by_tags"}
+         "list_sfx_library", "search_sfx_by_tags", "generate_subtitles"}
 
 
 async def run_smoke_test(configuration=None):
@@ -81,6 +81,9 @@ async def run_smoke_test(configuration=None):
                 assert len(analyzed["data"]["errors"]) == 1 and not analyzed["data"]["complete"]
                 assert (project / "source_index.json").is_file()
                 await call("get_timeline", {"project": "Smoke"})
+                # No network/model downloads in the general server smoke test.
+                subtitle_error = await call("generate_subtitles", {"project": "Smoke", "language": "invalid"}, success=False)
+                assert subtitle_error["error"]["code"] == "unsupported_language"
                 created = await call("create_timeline", {"project": "Smoke"})
                 assert not created["data"]["created"]
                 await call("render_preview", {"project": "Smoke"}, success=False)
@@ -142,7 +145,8 @@ async def run_smoke_test(configuration=None):
                 await call("ping")
                 return {"status": "PASS", "transport": "stdio", "tools": sorted(tools),
                         "project_error_recovery": "PASS", "preview_render": "PASS", "timeline_editing": "PASS",
-                        "music_mixing": "PASS", "sfx_mixing": "PASS", "sfx_library": "PASS"}
+                        "music_mixing": "PASS", "sfx_mixing": "PASS", "sfx_library": "PASS",
+                        "subtitle_error_recovery": "PASS"}
 
 
 if __name__ == "__main__":

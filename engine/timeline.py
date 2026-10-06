@@ -90,6 +90,16 @@ def validate_timeline(timeline: Timeline | dict, *, base_dir: str | Path | None 
                 except (OSError, ValueError, RuntimeError) as exc:
                     code = "unsupported_path" if os.name != "nt" and PureWindowsPath(clip.source).drive else "missing_source"
                     errors.append(TimelineIssue(code=code, location=location, message=str(exc)))
+    for track_index, track in enumerate(parsed.subtitle_tracks):
+        if track.file is None:
+            continue
+        from engine.subtitle import SubtitleError, read_srt
+        try:
+            path = _native_path(track.file)
+            read_srt(path if path.is_absolute() else root / path)
+        except (OSError, ValueError, RuntimeError, SubtitleError) as exc:
+            errors.append(TimelineIssue(code=getattr(exc, "code", "invalid_subtitle_file"),
+                                        location=["subtitle_tracks", track_index, "file"], message=str(exc)))
     return TimelineValidation(valid=not errors, errors=errors)
 
 

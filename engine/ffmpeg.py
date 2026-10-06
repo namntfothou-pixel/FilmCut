@@ -15,13 +15,13 @@ class FFmpegError(Exception):
                 "returncode": self.returncode}
 
 
-def run_ffmpeg(arguments: list[str], *, timeout: float = 300) -> None:
+def run_ffmpeg(arguments: list[str], *, timeout: float = 300, cwd: Path | None = None) -> None:
     """Run an argument vector, surfacing FFmpeg diagnostics and exit status."""
     command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", *arguments]
     try:
         result = subprocess.run(command, shell=False, stdout=subprocess.DEVNULL,
                                 stderr=subprocess.PIPE, text=True, encoding="utf-8",
-                                errors="replace", timeout=timeout, check=False)
+                                errors="replace", timeout=timeout, check=False, cwd=cwd)
     except FileNotFoundError as exc:
         raise FFmpegError("ffmpeg_missing", "FFmpeg is not available on PATH.") from exc
     except subprocess.TimeoutExpired as exc:

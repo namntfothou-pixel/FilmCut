@@ -9,7 +9,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from engine import media, render, timeline
-from services import project_service, timeline_service, music_service, sfx_service
+from services import project_service, timeline_service, music_service, sfx_service, subtitle_service
 
 logger = logging.getLogger("filmcut.mcp")
 
@@ -112,10 +112,10 @@ def build_server(projects_root: Path | None = None, sfx_library_root: Path | Non
 
     @server.tool(structured_output=True)
     @_guard
-    def render_preview(project: str) -> dict[str, Any]:
-        """Render the saved video timeline into preview/preview.mp4."""
+    def render_preview(project: str, burn_subtitles: bool | None = None) -> dict[str, Any]:
+        """Render preview; optionally burn the enabled subtitle track with plain styling."""
         result = require_project(project)
-        path = render.render_timeline(result.project_path)
+        path = render.render_timeline(result.project_path, burn_subtitles=burn_subtitles)
         return _success({"preview_path": str(path), "metadata": media.probe_media(path)})
 
     @server.tool(structured_output=True)
@@ -224,6 +224,13 @@ def build_server(projects_root: Path | None = None, sfx_library_root: Path | Non
     def search_sfx_by_tags(tags: list[str], match_all: bool = True) -> dict[str, Any]:
         """Search available SFX by all tags (default) or any tag, without AI."""
         return _success(sfx_service.search_sfx_by_tags(tags, match_all, library_root=sfx_library_root))
+
+    @server.tool(structured_output=True)
+    @_guard
+    def generate_subtitles(project: str, language: str) -> dict[str, Any]:
+        """Transcribe rendered dialogue locally (en/vi), save UTF-8 SRT and timeline reference."""
+        result = require_project(project)
+        return _success(subtitle_service.generate_subtitles(result.project_path, language))
 
     return server
 

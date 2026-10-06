@@ -44,7 +44,8 @@ python3 -m venv .venv
 
 Pydantic, the MCP Python SDK, and pytest are installed for development.
 FFmpeg and ffprobe are external executables, not Python packages.
-`faster-whisper` will be added during a later transcription phase.
+`faster-whisper` provides local transcription. Whisper model weights load only
+on explicit subtitle generation, with a small configurable multilingual default.
 
 Follow the permanent development rules in `AGENTS.md`.
 
@@ -132,8 +133,9 @@ sources resolve against the project directory during load and save.
 Music and SFX use decibel gain and their own fields documented below.
 
 Video, dialogue, and music clips cannot overlap within a track. Overlaps across
-tracks and within SFX tracks are allowed. Subtitle cues contain text and
-timeline start/end times; enabled cues cannot overlap within a subtitle track.
+tracks and within SFX tracks are allowed. Subtitle tracks reference a UTF-8 SRT
+`file` or contain inline cues, with `enabled` and `burn_in` flags. Inline cues
+contain text and timeline start/end times; enabled cues cannot overlap within a track.
 Touching intervals are allowed, with a 1e-9-second comparison tolerance.
 
 Video transitions contain an ID, `from_clip`, `to_clip`, `kind` (crossfade,
@@ -190,7 +192,7 @@ clip audio volume is honored. AAC padding is trimmed before concatenation.
 
 This phase supports exactly one enabled video track with normal-speed clips
 placed contiguously from time zero. Gaps, overlapping tracks, speed changes,
-transitions, and active separate audio/subtitle tracks return explicit
+transitions, and active separate dialogue audio tracks return explicit
 errors. Odd project dimensions are rejected because this H.264/yuv420p output
 requires even dimensions. Trim endpoints must be within the source duration.
 Frame quantization can change duration by approximately one output frame.
@@ -227,6 +229,10 @@ Five non-destructive video editing tools are also available: `add_clip`, `remove
 `trim_clip`, `move_clip`, and `set_clip_speed`, plus three manual music tools:
 `add_music`, `remove_music`, and `update_music`. Five SFX tools are available:
 `add_sfx`, `remove_sfx`, `update_sfx`, `list_sfx_library`, and `search_sfx_by_tags`.
+`generate_subtitles(project, language)` generates English/Vietnamese captions.
+`render_preview(project, burn_subtitles=None)` optionally burns one enabled
+subtitle track. Omitted burn_subtitles honors the timeline's burn_in flags;
+False omits burn-in, and True uses the enabled track.
 
 Run the standalone official-SDK client test from the repository root:
 
@@ -235,11 +241,13 @@ Run the standalone official-SDK client test from the repository root:
 ```
 
 It launches a real server process, performs initialization and tool discovery,
-calls all twenty tools, tests recovery after project and argument errors, and
+calls all twenty-one tools, tests recovery after project and argument errors, and
 renders synthetic media through MCP. Its temporary project storage is isolated
 using `FILMCUT_PROJECTS_ROOT` and `FILMCUT_SFX_LIBRARY`; real projects and the
 local asset catalog are untouched. On Linux use
 `.venv/bin/python scripts/mcp_smoke_test.py`.
+The regular smoke test checks subtitle error recovery without downloading or
+loading a model. Real transcription has a separate opt-in smoke test below.
 
 To produce the exact Windows Codex configuration, run this on the Windows
 machine from the FilmCut folder:
@@ -403,3 +411,78 @@ not modify source files or the saved timeline.
 Real tests render three simultaneous tones with dialogue and looping BGM,
 verify timestamps, trims, gain, fades, clipping protection, cache cleanup, and
 H.264/AAC/48000 Hz output with ffprobe. No AI SFX detection is implemented.
+
+## Local automatic subtitles
+
+`generate_subtitles(project, language)` accepts `en`/`English` or
+`vi`/`Vietnamese`. It renders the saved video's trims and original dialogue
+volume before BGM/SFX mixing, extracts mono 16 kHz PCM in the project cache,
+then runs faster-whisper locally with voice activity detection. Segment times
+use the rendered timeline clock, not the original source clock. The current
+contiguous, normal-speed, single-video-track render limits still apply.
+
+The structured result includes `segments` with `start`, `end`, and `text`, the
+model/language, `srt_path`, `transcript_path`, a timeline reference, and backup
+path. UTF-8 SRT and readable transcript JSON are saved under
+`projects/<project>/subtitles/` with unique revision filenames. No speech
+produces an empty SRT and segment list. Generation preserves the preview and
+source media and cleans its own temporary files on success or failure.
+
+The generated timeline track uses a relative SRT reference:
+
+```json
+{
+  "id": "generated-subtitles-<revision>",
+  "language": "vi",
+  "file": "subtitles/subtitles-vi-<revision>.srt",
+  "enabled": true,
+  "burn_in": false,
+  "cues": []
+}
+```
+
+Every SRT reference is validated on timeline load/save. Regenerating a language
+updates its generated track and backs up the previous timeline; old subtitle
+artifacts remain available to history. Results are rejected if timeline.json or
+project.json changed during inference, so a long transcription cannot overwrite
+new edits. Regenerate captions after changing video trims or placements.
+
+Preview burn-in is optional: pass `burn_subtitles=True` to `render_preview`,
+or set the desired track's `burn_in` to true in timeline.json. Only one enabled
+subtitle track can burn at a time. FFmpeg must include the `subtitles` filter
+(libass); default plain styling and a system font with Vietnamese glyphs are
+used. Burn-in preserves the mixed AAC audio and installs the verified preview
+atomically. Failure leaves the previous preview intact. Advanced styling is
+not implemented.
+
+Whisper settings are environment variables inherited by the MCP process:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `FILMCUT_WHISPER_MODEL` | `tiny` | Multilingual model name or local CTranslate2 model directory |
+| `FILMCUT_WHISPER_DEVICE` | `cpu` | Inference device |
+| `FILMCUT_WHISPER_COMPUTE_TYPE` | `int8` | Inference precision |
+| `FILMCUT_WHISPER_THREADS` | `2` | CPU threads |
+| `FILMCUT_WHISPER_CACHE` | `<repo>/.cache/whisper` | Model download/cache directory |
+| `FILMCUT_WHISPER_LOCAL_ONLY` | `false` | Require already cached/local weights, with no download |
+
+The multilingual tiny weights are roughly 75 MB and download from Hugging Face
+only on the first explicit transcription request. Installation, MCP startup,
+tool discovery, and regular tests do not download models. Cached/local weights
+work offline. A blocked download returns `whisper_model_unavailable` with
+configuration guidance. Do not use an English-only `.en` model for Vietnamese.
+Tiny has limited accuracy; a larger multilingual model can be configured
+explicitly when desired. Review automatic captions before export.
+
+Run the **real transcription** smoke test with an existing clear speech file:
+
+```powershell
+& '.\.venv\Scripts\python.exe' '.\scripts\subtitle_smoke_test.py' '<absolute path to speech.wav>' --language vi
+```
+
+Use `--language en` for English and `--output-root <new-directory>` to retain
+artifacts. This test launches the MCP server, generates subtitles using the
+configured real model, checks nonempty segments and SRT, renders a captioned
+preview, probes it, and fully decodes it. It may download tiny on first use;
+ordinary pytest uses inference test doubles, with real FFmpeg extraction and
+burn-in, to remain deterministic and network independent.

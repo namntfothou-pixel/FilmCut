@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from engine.ffmpeg import FFmpegError, concatenate_normalized, encoding_arguments, normalization_filter, run_ffmpeg
 from engine.audio import mix_audio, resolve_music
+from engine.subtitle import SubtitleError, burn_subtitles as burn_subtitle_track
 from engine.media import MediaError, probe_media
 from engine.timeline import TimelineError, _native_path, _project_context, load_timeline
 from schemas.timeline import VideoClip, VideoTrack
@@ -106,7 +107,7 @@ def _render_track(folder, metadata, cache, track, destination):
 def _error(exc):
     if isinstance(exc, RenderError):
         return exc
-    if isinstance(exc, (FFmpegError, MediaError, TimelineError)):
+    if isinstance(exc, (FFmpegError, MediaError, TimelineError, SubtitleError)):
         return RenderError(exc.code, str(exc), exc.to_dict())
     return RenderError("render_failed", str(exc))
 
@@ -152,25 +153,49 @@ def render_video_track(project, track: VideoTrack | dict) -> Path:
         raise error from exc
 
 
-def render_timeline(project) -> Path:
+def _video_track(timeline, metadata):
+    if (timeline.width, timeline.height, timeline.fps) != (metadata.resolution.width, metadata.resolution.height, metadata.fps):
+        raise RenderError("settings_mismatch", "Timeline resolution/FPS must match project.json.")
+    if any(clip.enabled for track in timeline.audio_tracks for clip in track.clips):
+        raise RenderError("unsupported_tracks", "Separate dialogue tracks are not rendered yet.")
+    tracks = [track for track in timeline.video_tracks if any(clip.enabled for clip in track.clips)]
+    if len(tracks) != 1:
+        raise RenderError("unsupported_track_count", "Exactly one nonempty video track is required.")
+    return tracks[0]
+
+
+def render_dialogue_audio(project, timeline, workspace: Path) -> Path:
+    """Render a timeline snapshot's dialogue to mono 16 kHz PCM for transcription."""
+    try:
+        folder, metadata, cache = _context(project)
+        track = _video_track(timeline, metadata)
+        video, audio = workspace / "dialogue.mp4", workspace / "dialogue.wav"
+        _render_track(folder, metadata, cache, track, video)
+        run_ffmpeg(["-n", "-i", str(video), "-map", "0:a:0", "-vn", "-ar", "16000", "-ac", "1",
+                    "-c:a", "pcm_s16le", str(audio)])
+        return audio
+    except (RenderError, FFmpegError, MediaError, TimelineError, OSError, ValueError, RuntimeError) as exc:
+        if isinstance(exc, RenderError):
+            raise
+        raise _error(exc) from exc
+
+
+def render_timeline(project, *, burn_subtitles: bool | None = None) -> Path:
     """Render saved timeline.json into preview/preview.mp4 after verification."""
     try:
         folder, metadata, cache = _context(project)
         timeline = load_timeline(folder)
-        if (timeline.width, timeline.height, timeline.fps) != (metadata.resolution.width, metadata.resolution.height, metadata.fps):
-            raise RenderError("settings_mismatch", "Timeline resolution/FPS must match project.json.")
-        if any(clip.enabled for tracks in (timeline.audio_tracks,)
-               for track in tracks for clip in track.clips) or any(cue.enabled for track in timeline.subtitle_tracks for cue in track.cues):
-            raise RenderError("unsupported_tracks", "Separate dialogue tracks and subtitles are not rendered yet.")
-        tracks = [track for track in timeline.video_tracks if any(clip.enabled for clip in track.clips)]
-        if len(tracks) != 1:
-            raise RenderError("unsupported_track_count", "Exactly one nonempty video track is required.")
+        track = _video_track(timeline, metadata)
+        subtitles = [track for track in timeline.subtitle_tracks if track.enabled
+                     and (burn_subtitles is True or (burn_subtitles is None and track.burn_in))]
+        if len(subtitles) > 1:
+            raise RenderError("ambiguous_subtitle_track", "Enable burn-in for one subtitle track at a time.")
         preview = folder / "preview"
         preview.mkdir(exist_ok=True)
         if preview.resolve().parent != folder:
             raise RenderError("invalid_preview", "Preview directory must be inside its project directory.")
         destination = preview / "preview.mp4"
-        for clip in _active_clips(tracks[0]):
+        for clip in _active_clips(track):
             source = _native_path(clip.source)
             source = source if source.is_absolute() else folder / source
             if source.resolve() == destination.resolve():
@@ -183,15 +208,20 @@ def render_timeline(project) -> Path:
         with tempfile.TemporaryDirectory(prefix="preview-", dir=cache) as workspace:
             workspace = Path(workspace)
             candidate = workspace / "preview.mp4"
-            _render_track(folder, metadata, cache, tracks[0], candidate)
-            duration = sum(clip.duration for clip in _active_clips(tracks[0]))
+            _render_track(folder, metadata, cache, track, candidate)
+            duration = sum(clip.duration for clip in _active_clips(track))
             mixed = workspace / "mixed.mp4"
             if mix_audio(candidate, music, sfx, folder, duration, workspace, mixed):
                 _verify(mixed, metadata, duration)
                 candidate = mixed
+            if subtitles:
+                captioned = workspace / "captioned.mp4"
+                if burn_subtitle_track(candidate, subtitles[0], folder, workspace, captioned):
+                    _verify(captioned, metadata, duration)
+                    candidate = captioned
             candidate.replace(destination)
         return destination
-    except (RenderError, FFmpegError, MediaError, TimelineError, OSError, ValueError, RuntimeError) as exc:
+    except (RenderError, FFmpegError, MediaError, TimelineError, SubtitleError, OSError, ValueError, RuntimeError) as exc:
         if isinstance(exc, RenderError):
             raise
         raise _error(exc) from exc

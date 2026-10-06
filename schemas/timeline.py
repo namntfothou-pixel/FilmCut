@@ -197,7 +197,16 @@ class SubtitleCue(IntentModel):
 class SubtitleTrack(IntentModel):
     id: Identifier
     language: str = "und"
+    file: Identifier | None = None
+    enabled: bool = True
+    burn_in: bool = False
     cues: list[SubtitleCue] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def valid_content(self):
+        if self.file is not None and (not self.file.strip() or self.cues):
+            raise ValueError("Subtitle track must use a nonempty SRT file or inline cues, not both")
+        return self
 
 
 class Timeline(IntentModel):
