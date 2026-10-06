@@ -49,6 +49,42 @@ class AudioClip(IntentModel):
 class VideoClip(AudioClip):
     """Video trim, placement, playback rate, and original audio volume."""
 
+    audio_source_in: Timestamp | None = None
+    audio_source_out: Positive | None = None
+    audio_timeline_start: Timestamp | None = None
+
+    @property
+    def has_audio_offset(self):
+        return any(value is not None for value in (self.audio_source_in, self.audio_source_out, self.audio_timeline_start))
+
+    @property
+    def resolved_audio_source_in(self):
+        return self.source_in if self.audio_source_in is None else self.audio_source_in
+
+    @property
+    def resolved_audio_source_out(self):
+        return self.source_out if self.audio_source_out is None else self.audio_source_out
+
+    @property
+    def resolved_audio_timeline_start(self):
+        return self.timeline_start if self.audio_timeline_start is None else self.audio_timeline_start
+
+    @property
+    def audio_duration(self):
+        return (self.resolved_audio_source_out - self.resolved_audio_source_in) / self.speed
+
+    @property
+    def audio_timeline_end(self):
+        return self.resolved_audio_timeline_start + self.audio_duration
+
+    @model_validator(mode="after")
+    def valid_audio_interval(self):
+        if self.resolved_audio_source_out <= self.resolved_audio_source_in:
+            raise ValueError("audio_source_out must exceed audio_source_in")
+        if not math.isfinite(self.audio_timeline_end):
+            raise ValueError("Computed source-audio end must be finite")
+        return self
+
 
 class MusicClip(IntentModel):
     """Manual music intent; a loop repeats the selected source interval."""

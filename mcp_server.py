@@ -239,6 +239,27 @@ def build_server(projects_root: Path | None = None, sfx_library_root: Path | Non
         result = require_project(project)
         return _success(timeline_service.set_transition(result.project_path, clip_id, transition_type, duration))
 
+    @server.tool(structured_output=True)
+    @_guard
+    def set_j_cut(project: str, clip_id: str, duration: float) -> dict[str, Any]:
+        """Lead incoming source dialogue by duration seconds using pre-roll; preserve video and lip sync."""
+        result = require_project(project)
+        return _success(timeline_service.set_j_cut(result.project_path, clip_id, duration))
+
+    @server.tool(structured_output=True)
+    @_guard
+    def set_l_cut(project: str, clip_id: str, duration: float) -> dict[str, Any]:
+        """Extend outgoing source dialogue into following picture using post-roll; preserve video timing."""
+        result = require_project(project)
+        return _success(timeline_service.set_l_cut(result.project_path, clip_id, duration))
+
+    @server.tool(structured_output=True)
+    @_guard
+    def reset_audio_offset(project: str, clip_id: str) -> dict[str, Any]:
+        """Reset the three independent audio fields to follow the video, with timeline history."""
+        result = require_project(project)
+        return _success(timeline_service.reset_audio_offset(result.project_path, clip_id))
+
     return server
 
 

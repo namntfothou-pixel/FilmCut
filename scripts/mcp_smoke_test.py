@@ -20,7 +20,8 @@ from engine.ffmpeg import run_ffmpeg
 TOOLS = {"ping", "create_project", "get_project", "analyze_folder", "get_timeline", "create_timeline", "render_preview",
          "add_clip", "remove_clip", "trim_clip", "move_clip", "set_clip_speed",
          "add_music", "remove_music", "update_music", "add_sfx", "remove_sfx", "update_sfx",
-         "list_sfx_library", "search_sfx_by_tags", "generate_subtitles", "set_transition"}
+         "list_sfx_library", "search_sfx_by_tags", "generate_subtitles", "set_transition",
+         "set_j_cut", "set_l_cut", "reset_audio_offset"}
 
 
 async def run_smoke_test(configuration=None):
@@ -30,7 +31,7 @@ async def run_smoke_test(configuration=None):
         source.mkdir()
         video = source / "synthetic.mp4"
         run_ffmpeg(["-n", "-f", "lavfi", "-i", "testsrc2=size=160x120:rate=24", "-f", "lavfi", "-i",
-                    "sine=frequency=480:sample_rate=48000", "-t", "0.5",
+                    "sine=frequency=480:sample_rate=48000", "-t", "2",
                     "-c:v", "mpeg4", "-threads", "1", "-c:a", "aac", str(video)])
         music = source / "BGM.wav"
         run_ffmpeg(["-n", "-f", "lavfi", "-i", "sine=frequency=960:sample_rate=44100", "-t", "0.2",
@@ -130,8 +131,8 @@ async def run_smoke_test(configuration=None):
                 assert data["metadata"]["audio_codec"] == "aac"
                 assert data["metadata"]["sample_rate"] == 48000
                 assert abs(data["metadata"]["duration"] - 0.5) < 0.07
-                following = await call("add_clip", {"project": "Smoke", "source": str(video), "source_in": 0,
-                                                    "source_out": 0.5, "position": 0.5})
+                following = await call("add_clip", {"project": "Smoke", "source": str(video), "source_in": 0.25,
+                                                    "source_out": 0.75, "position": 0.5})
                 for kind in ("crossfade", "fade_to_black"):
                     changed = await call("set_transition", {"project": "Smoke", "clip_id": clip_id,
                                                             "transition_type": kind, "duration": 0.125})
@@ -142,6 +143,13 @@ async def run_smoke_test(configuration=None):
                                               "transition_type": "wipe", "duration": 0.125}, success=False)
                 await call("set_transition", {"project": "Smoke", "clip_id": clip_id,
                                               "transition_type": "cut", "duration": 0})
+                await call("set_j_cut", {"project": "Smoke", "clip_id": following["data"]["clip_id"], "duration": 0.1})
+                await call("set_l_cut", {"project": "Smoke", "clip_id": clip_id, "duration": 0.1})
+                offset_render = await call("render_preview", {"project": "Smoke"})
+                assert abs(offset_render["data"]["metadata"]["duration"] - 1) < 0.07
+                await call("set_j_cut", {"project": "Smoke", "clip_id": following["data"]["clip_id"], "duration": 10}, success=False)
+                for id_to_reset in (clip_id, following["data"]["clip_id"]):
+                    await call("reset_audio_offset", {"project": "Smoke", "clip_id": id_to_reset})
                 await call("remove_clip", {"project": "Smoke", "clip_id": following["data"]["clip_id"]})
                 for sfx_id in effects:
                     await call("remove_sfx", {"project": "Smoke", "sfx_id": sfx_id})
@@ -159,7 +167,7 @@ async def run_smoke_test(configuration=None):
                 return {"status": "PASS", "transport": "stdio", "tools": sorted(tools),
                         "project_error_recovery": "PASS", "preview_render": "PASS", "timeline_editing": "PASS",
                         "music_mixing": "PASS", "sfx_mixing": "PASS", "sfx_library": "PASS",
-                        "subtitle_error_recovery": "PASS", "transitions": "PASS"}
+                        "subtitle_error_recovery": "PASS", "transitions": "PASS", "audio_offsets": "PASS"}
 
 
 if __name__ == "__main__":

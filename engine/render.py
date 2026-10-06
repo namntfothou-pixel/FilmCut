@@ -6,7 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from engine.ffmpeg import FFmpegError, concatenate_normalized, encoding_arguments, normalization_filter, run_ffmpeg, transition_normalized
-from engine.audio import mix_audio, resolve_music
+from engine.audio import mix_audio, resolve_music, replace_dialogue
 from engine.subtitle import SubtitleError, burn_subtitles as burn_subtitle_track
 from engine.media import MediaError, probe_media
 from engine.timeline import TimelineError, _native_path, _project_context, load_timeline
@@ -48,7 +48,7 @@ def _verify(path, metadata, duration):
         raise RenderError("invalid_output", "Rendered output failed codec, format or duration verification.", info)
 
 
-def _render_clip(folder, metadata, clip, destination):
+def _render_clip(folder, metadata, clip, destination, *, source_audio=True):
     clip = VideoClip.model_validate(clip.model_dump() if isinstance(clip, VideoClip) else clip)
     if not clip.enabled:
         raise RenderError("disabled_clip", "Cannot render a disabled clip independently.")
@@ -64,13 +64,14 @@ def _render_clip(folder, metadata, clip, destination):
                           {"clip": clip.id, "source_duration": info["duration"]})
     duration = clip.duration
     arguments = ["-n", "-ss", f"{clip.source_in:.12g}", "-i", str(source)]
-    if not info["has_audio"]:
+    has_audio = info["has_audio"] and source_audio
+    if not has_audio:
         arguments += ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
     vf = ("setpts=PTS-STARTPTS," + normalization_filter(metadata.resolution.width, metadata.resolution.height, metadata.fps)
           + f",tpad=stop_mode=clone:stop_duration={1 / metadata.fps:.12g}")
     af = (f"asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,"
           f"volume={clip.volume:.12g},apad,atrim=duration={duration:.12g}")
-    arguments += ["-map", "0:V:0", "-map", "0:a:0" if info["has_audio"] else "1:a:0",
+    arguments += ["-map", "0:V:0", "-map", "0:a:0" if has_audio else "1:a:0",
                   "-filter_threads", "1", "-vf", vf, "-af", af, "-t", f"{duration:.12g}",
                   *encoding_arguments(), str(destination)]
     run_ffmpeg(arguments)
@@ -98,10 +99,13 @@ def _active_clips(track):
 def _render_track(folder, metadata, cache, track, destination):
     clips = _active_clips(track)
     with tempfile.TemporaryDirectory(prefix="render-", dir=cache) as workspace:
+        workspace = Path(workspace)
+        independent_audio = any(clip.has_audio_offset for clip in clips)
+        candidate = workspace / "picture.mp4" if independent_audio else destination
         files = []
         for index, clip in enumerate(clips):
             output = Path(workspace) / f"clip-{index:04d}.mp4"
-            _render_clip(folder, metadata, clip, output)
+            _render_clip(folder, metadata, clip, output, source_audio=not independent_audio)
             files.append(output)
         boundaries = {(item.from_clip, item.to_clip): item for item in track.transitions}
         if any(item.overlap for item in track.transitions):
@@ -115,9 +119,14 @@ def _render_track(folder, metadata, cache, track, destination):
                 duration += clips[index].duration - overlap
                 _verify(output, metadata, duration)
                 joined = output
-            joined.replace(destination)
+            joined.replace(candidate)
         else:
-            concatenate_normalized(files, [clip.duration for clip in clips], destination, fps=metadata.fps)
+            concatenate_normalized(files, [clip.duration for clip in clips], candidate, fps=metadata.fps)
+        if independent_audio:
+            mixed = workspace / "dialogue-mixed.mp4"
+            if replace_dialogue(candidate, clips, track.transitions, folder, clips[-1].timeline_end, workspace, mixed):
+                candidate = mixed
+            candidate.replace(destination)
         _verify(destination, metadata, clips[-1].timeline_end)
 
 
@@ -144,7 +153,19 @@ def render_clip(project, clip: VideoClip | dict) -> Path:
     try:
         folder, metadata, cache = _context(project)
         destination = cache / f"clip-{uuid4().hex}.mp4"
-        _render_clip(folder, metadata, clip, destination)
+        clip = VideoClip.model_validate(clip.model_dump() if isinstance(clip, VideoClip) else clip)
+        if clip.has_audio_offset:
+            with tempfile.TemporaryDirectory(prefix="clip-audio-", dir=cache) as temporary:
+                workspace = Path(temporary)
+                candidate = workspace / "picture.mp4"
+                _render_clip(folder, metadata, clip, candidate, source_audio=False)
+                mixed = workspace / "dialogue.mp4"
+                if replace_dialogue(candidate, [clip], [], folder, clip.duration, workspace, mixed, origin=clip.timeline_start):
+                    candidate = mixed
+                candidate.replace(destination)
+                _verify(destination, metadata, clip.duration)
+        else:
+            _render_clip(folder, metadata, clip, destination)
         return destination
     except (RenderError, FFmpegError, MediaError, TimelineError, OSError, ValueError, RuntimeError) as exc:
         error = _error(exc)

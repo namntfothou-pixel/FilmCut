@@ -130,6 +130,9 @@ nonnegative linear gain (1 is unchanged); speed must be finite and positive.
 Disabled clips retain their intent but do not participate in overlap checks.
 All source files, including those on disabled clips, must exist. Relative
 sources resolve against the project directory during load and save.
+Video clips also have independent `audio_source_in`, `audio_source_out`, and
+`audio_timeline_start` fields. Null values follow the corresponding video
+fields; explicit values control source dialogue separately.
 Music and SFX use decibel gain and their own fields documented below.
 
 Video clips may overlap only at an explicitly defined transition boundary.
@@ -228,6 +231,8 @@ missing file. Invalid existing timelines return errors without being reset.
 `render_preview` uses the saved timeline and retains the current render limits.
 `set_transition(project, clip_id, transition_type, duration)` edits the boundary
 after an enabled video clip, with automatic timeline history.
+`set_j_cut`, `set_l_cut`, and `reset_audio_offset` independently edit source
+audio timing without changing visual transitions or video placement.
 Five non-destructive video editing tools are also available: `add_clip`, `remove_clip`,
 `trim_clip`, `move_clip`, and `set_clip_speed`, plus three manual music tools:
 `add_music`, `remove_music`, and `update_music`. Five SFX tools are available:
@@ -244,7 +249,7 @@ Run the standalone official-SDK client test from the repository root:
 ```
 
 It launches a real server process, performs initialization and tool discovery,
-calls all twenty-two tools, tests recovery after project and argument errors, and
+calls all twenty-five tools, tests recovery after project and argument errors, and
 renders synthetic media through MCP. Its temporary project storage is isolated
 using `FILMCUT_PROJECTS_ROOT` and `FILMCUT_SFX_LIBRARY`; real projects and the
 local asset catalog are untouched. On Linux use
@@ -337,10 +342,10 @@ Only `cut`, `crossfade`, and `fade_to_black` are supported.
 - `fade_to_black` fades the outgoing picture to black in the first half and
   fades the incoming picture from black in the second half of that overlap.
 
-Both blends overlap video and original dialogue audio for exactly the same
-interval. Audio uses linear crossfades, including while the picture fades
-through black; there is no separate audio offset. J-cuts and L-cuts are not
-implemented. Blends must last at least one output frame and fit both clips.
+Default dialogue follows the visual blend interval with linear audio
+crossfades, including while the picture fades through black. Explicit source
+audio timing overrides operate independently and bypass those implicit fades.
+Blends must last at least one output frame and fit both clips.
 
 The tool stores a record in the video track's `transitions` list:
 
@@ -381,6 +386,85 @@ to overlap positions in memory when loaded. Loading does not rewrite the file;
 the next save stores canonical `type` fields and backs up the original JSON.
 New records always require correctly placed overlaps. Flashy transitions are
 not implemented.
+
+## Independent dialogue timing: J-cuts and L-cuts
+
+J/L edits are source-audio operations. They never add a visual transition type,
+shift video trims, move video clips, or change video duration. VideoClip stores:
+
+| Field | Null/default behavior | Explicit behavior |
+| --- | --- | --- |
+| `audio_source_in` | Follow source_in | Select the first audio source time |
+| `audio_source_out` | Follow source_out | Select the last audio source time |
+| `audio_timeline_start` | Follow timeline_start | Place the selected audio interval on the timeline |
+
+All times are seconds; source_out must exceed source_in, timestamps must be
+finite/nonnegative, and explicit audio trims must fit the source audio stream.
+Overlapping source-audio events are allowed. Clip `volume` applies once to its
+selected audio. Disabled clips contribute neither picture nor source audio.
+The existing normal-speed render limit still applies.
+
+- `set_j_cut(project, clip_id, duration)` leads an incoming clip's dialogue by
+  duration seconds, selecting source_in - duration * speed and placing it at
+  timeline_start - duration. It preserves the currently selected audio end.
+  A preceding enabled clip, source pre-roll, and nonnegative timeline placement
+  are required. Repeating the operation sets an absolute lead; it does not
+  accumulate offsets.
+- `set_l_cut(project, clip_id, duration)` sets outgoing dialogue's timeline end
+  to video timeline_end + duration, retaining its current audio source/start.
+  For synchronized/J-cut audio this selects source_out + duration * speed.
+  A following enabled clip, source post-roll, and enough remaining picture time
+  are required. Repeating it sets an absolute extension.
+- `reset_audio_offset(project, clip_id)` sets all three fields to null, restoring
+  dialogue that follows the video's trim/placement and default transition fades.
+
+Starting from synchronized audio, J and L can combine on a middle clip while
+preserving lip sync throughout the visible picture. For a clip using source
+1–3 seconds at timeline 2–4 seconds, a 0.5-second J-cut records audio source
+0.5–3 at timeline 1.5; adding a 0.5-second L-cut extends the audio source end
+to 3.5 and its timeline end to 4.5. The mapping remains:
+
+`audio timeline time = audio_timeline_start + (source time - audio_source_in) / speed`
+
+Thus source time 1 still plays at timeline time 2 and source time 3 at timeline
+time 4. A J-cut uses earlier source sound, and an L-cut uses later source sound;
+neither repeats the visible trim to create an artificial overlap. Arbitrary
+independent audio fields may also be authored directly in timeline.json.
+
+All three tools use validated timeline transactions and exact prior-JSON
+backups. Missing audio, insufficient handles, invalid offsets, or invalid
+boundaries return structured errors without writing a timeline revision. A
+visual transition change leaves explicit audio timestamps fixed; review those
+placements or reset/reapply the audio edits when changing picture placement.
+Regenerate subtitles after changing dialogue timing.
+
+When any enabled clip has an explicit audio field, the renderer normalizes and
+joins the picture with silent audio, then rebuilds dialogue from the original
+source intervals. The final dialogue graph never includes the picture input's
+embedded audio. Each enabled source clip contributes exactly one event; clips
+without overrides retain their synchronized transition fade envelopes. Explicit
+events receive no fades from visual transitions. Float PCM intermediates,
+48000 Hz sample delays, a non-normalizing mix, and a final peak limiter preserve
+levels and protect overlaps from clipping. BGM/SFX mix onto that dialogue once.
+When adjacent clips refer to the same recording and map the same source samples
+to the same output samples, shared J/L handles are deduplicated with sample-based
+masks. Explicit audio edits own shared regions ahead of default audio; stable
+clip order resolves overlap between two explicit edits. Normal complementary
+crossfade envelopes between unedited clips remain intact. Distinct sources or
+different source-time mappings continue to mix normally.
+
+Placement rounds to the nearest audio sample, independently of the video frame
+clock. Audio is bounded by the final picture duration, and isolated render_clip
+projects a clip's global audio event into its local picture window. Subtitle
+transcription uses the same independently rendered dialogue, without BGM/SFX.
+Source trims use resampled PCM sample counts, avoiding packet timestamp/seek
+rounding that could shift source audio or create phase errors in overlaps.
+
+Real tests use different tones before, during, and after each source's picture
+trim. They verify the source-to-timeline equations, audible overlap windows,
+unchanged dialogue gain, no default-dialogue duplication, sample-delay rounding,
+peak limiting, unchanged hashes for every rendered video frame, and ffprobe
+format/duration. Cache cleanup and prior-preview preservation are tested too.
 
 ## Manual music and BGM mixing
 

@@ -1,8 +1,10 @@
 """Non-destructive video-clip editing with validated timeline snapshots."""
 
 from uuid import uuid4
+import math
 
 from engine.media import probe_media
+from engine.audio import validate_clip_audio_source
 from engine.timeline import (
     TimelineError, _native_path, _project_context, load_timeline,
     save_locked_timeline, timeline_lock,
@@ -135,3 +137,54 @@ def set_transition(project, clip_id: str, transition_type: str, duration: float)
                        previous_duration=previous_duration, duration=timeline.duration)
         return left, f"Set {transition.type} after {left.id} ({transition.duration:g}s); video duration {timeline.duration:g}s."
     return {**_edit(project, "set_transition", change), **details}
+
+
+def _set_audio_offset(project, clip_id, duration, *, lead):
+    def change(timeline, folder):
+        if not isinstance(duration, (int, float)) or not math.isfinite(duration) or duration <= 0:
+            raise TimelineError("invalid_audio_offset", "Audio offset duration must be finite and positive")
+        track, index, clip = _find_clip(timeline, clip_id)
+        active = sorted((item for item in track.clips if item.enabled), key=lambda item: item.timeline_start)
+        if not clip.enabled or (lead and active.index(clip) == 0) or (not lead and active.index(clip) == len(active) - 1):
+            raise TimelineError("no_audio_boundary", "J-cut needs preceding picture; L-cut needs following picture")
+        data = clip.model_dump()
+        if lead:
+            source_in = clip.source_in - duration * clip.speed
+            start = clip.timeline_start - duration
+            if source_in < 0 or start < 0:
+                raise TimelineError("insufficient_audio_handle", "J-cut exceeds source pre-roll or available preceding timeline time")
+            data.update(audio_source_in=source_in, audio_source_out=clip.resolved_audio_source_out,
+                        audio_timeline_start=start)
+        else:
+            if clip.timeline_end + duration > track.duration + 1e-9:
+                raise TimelineError("insufficient_timeline_handle", "L-cut exceeds the remaining picture duration")
+            data.update(audio_source_in=clip.resolved_audio_source_in,
+                        audio_source_out=clip.resolved_audio_source_in + (
+                            clip.timeline_end + duration - clip.resolved_audio_timeline_start) * clip.speed,
+                        audio_timeline_start=clip.resolved_audio_timeline_start)
+        changed = VideoClip.model_validate(data)
+        validate_clip_audio_source(changed, folder)
+        track.clips[index] = changed
+        label = "J-cut" if lead else "L-cut"
+        return changed, (f"Set {label} on {clip.id} ({duration:g}s); source audio "
+                         f"{changed.resolved_audio_source_in:g}–{changed.resolved_audio_source_out:g}s "
+                         f"at timeline {changed.resolved_audio_timeline_start:g}s; video timing preserved.")
+    return _edit(project, "set_j_cut" if lead else "set_l_cut", change)
+
+
+def set_j_cut(project, clip_id: str, duration: float):
+    return _set_audio_offset(project, clip_id, duration, lead=True)
+
+
+def set_l_cut(project, clip_id: str, duration: float):
+    return _set_audio_offset(project, clip_id, duration, lead=False)
+
+
+def reset_audio_offset(project, clip_id: str):
+    def change(timeline, folder):
+        track, index, clip = _find_clip(timeline, clip_id)
+        changed = VideoClip.model_validate({**clip.model_dump(), "audio_source_in": None,
+                                           "audio_source_out": None, "audio_timeline_start": None})
+        track.clips[index] = changed
+        return changed, f"Reset {clip.id} source audio to follow its video trim and placement."
+    return _edit(project, "reset_audio_offset", change)

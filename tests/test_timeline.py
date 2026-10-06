@@ -117,9 +117,10 @@ def test_relative_sources_resolve_from_project_folder(project, monkeypatch):
     (MusicTrack, MusicClip, "music_tracks"),
 ])
 def test_same_track_overlaps_rejected(project, track_class, clip_class, field):
+    audio_fields = {"audio_source_in", "audio_source_out", "audio_timeline_start"}
     first = (MusicClip(id="clip1", file=str(project[1]), source_in=1, source_out=3)
-             if clip_class is MusicClip else clip_class(**clip(project[1], speed=2).model_dump()))
-    second = clip_class(**clip(project[1], id="clip2", timeline_start=1.9).model_dump())
+             if clip_class is MusicClip else clip_class(**clip(project[1], speed=2).model_dump(exclude=audio_fields)))
+    second = clip_class(**clip(project[1], id="clip2", timeline_start=1.9).model_dump(exclude=audio_fields))
     with pytest.raises(ValidationError, match="prohibited overlap"):
         Timeline(project="Timeline Test", **{field: [track_class(id="track", clips=[first, second])]})
 

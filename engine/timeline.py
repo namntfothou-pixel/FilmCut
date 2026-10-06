@@ -90,6 +90,15 @@ def validate_timeline(timeline: Timeline | dict, *, base_dir: str | Path | None 
                 except (OSError, ValueError, RuntimeError) as exc:
                     code = "unsupported_path" if os.name != "nt" and PureWindowsPath(clip.source).drive else "missing_source"
                     errors.append(TimelineIssue(code=code, location=location, message=str(exc)))
+                    continue
+                if collection == "video_tracks" and clip.has_audio_offset:
+                    from engine.audio import AudioError, validate_clip_audio_source
+                    from engine.media import MediaError
+                    try:
+                        validate_clip_audio_source(clip, root)
+                    except (AudioError, MediaError, OSError, ValueError, RuntimeError) as exc:
+                        errors.append(TimelineIssue(code=getattr(exc, "code", "invalid_audio_source"),
+                            location=[collection, track_index, "clips", clip_index, "audio_source_out"], message=str(exc)))
     for track_index, track in enumerate(parsed.subtitle_tracks):
         if track.file is None:
             continue
