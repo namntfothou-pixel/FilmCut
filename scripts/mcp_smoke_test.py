@@ -21,7 +21,8 @@ TOOLS = {"ping", "create_project", "get_project", "analyze_folder", "get_timelin
          "add_clip", "remove_clip", "trim_clip", "move_clip", "set_clip_speed",
          "add_music", "remove_music", "update_music", "add_sfx", "remove_sfx", "update_sfx",
          "list_sfx_library", "search_sfx_by_tags", "generate_subtitles", "set_transition",
-         "set_j_cut", "set_l_cut", "reset_audio_offset", "analyze_source", "get_source_analysis"}
+         "set_j_cut", "set_l_cut", "reset_audio_offset", "analyze_source", "get_source_analysis",
+         "analyze_script", "get_script_breakdown"}
 
 
 async def run_smoke_test(configuration=None):
@@ -94,6 +95,12 @@ async def run_smoke_test(configuration=None):
                 await call("analyze_source", {**source_args, "analysis": observations})
                 saved_analysis = await call("get_source_analysis", source_args)
                 assert saved_analysis["data"]["analysis"] == observations
+                assert (project / "timeline.json").read_bytes() == before_analysis
+                script_result = await call("analyze_script", {"project": "Smoke", "script":
+                    "INT. ROOM - NIGHT\nMai opens the letter.\nMAI: You came back.\n\nEXT. GATE - NIGHT\nAN: I promised."})
+                assert len(script_result["data"]["breakdown"]["requirements"]) == 2
+                assert (await call("get_script_breakdown", {"project": "Smoke"}))["data"] == script_result["data"]
+                await call("analyze_script", {"project": "Smoke", "script": ""}, success=False)
                 assert (project / "timeline.json").read_bytes() == before_analysis
                 await call("get_timeline", {"project": "Smoke"})
                 # No network/model downloads in the general server smoke test.

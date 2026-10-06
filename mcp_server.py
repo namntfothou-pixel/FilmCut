@@ -11,7 +11,9 @@ from mcp.server.fastmcp import FastMCP
 from engine import media, render, timeline
 from services import project_service, timeline_service, music_service, sfx_service, subtitle_service
 from services import analysis_service
+from services import script_service
 from analysis.provider import AnalysisProvider, SuppliedAnalysisProvider
+from analysis.script_provider import ScriptAnalysisProvider
 
 logger = logging.getLogger("filmcut.mcp")
 
@@ -46,7 +48,8 @@ def _guard(function):
 
 
 def build_server(projects_root: Path | None = None, sfx_library_root: Path | None = None,
-                 *, analysis_provider: AnalysisProvider | None = None) -> FastMCP:
+                 *, analysis_provider: AnalysisProvider | None = None,
+                 script_provider: ScriptAnalysisProvider | None = None) -> FastMCP:
     """Allow an isolated project root for tests, using the same existing services."""
     server = FastMCP("FilmCut", log_level="WARNING", instructions=(
         "Local video editing engine. Project arguments are project names. "
@@ -285,6 +288,28 @@ def build_server(projects_root: Path | None = None, sfx_library_root: Path | Non
         """Reset the three independent audio fields to follow the video, with timeline history."""
         result = require_project(project)
         return _success(timeline_service.reset_audio_offset(result.project_path, clip_id))
+
+    @server.tool(structured_output=True)
+    @_guard
+    def analyze_script(project: str, script: str, breakdown: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Convert script text to scene requirements and save script_breakdown.json.
+
+        Offline parser accepts INT./EXT., SCENE 1, SHOT 1, or CẢNH 1 headings,
+        uppercase speaker cues, and explicit Characters/Location/Action/Emotion/
+        Dialogue/Shot size/Continuity/Duration/Notes labels. Unknown semantics
+        remain null. Optionally supply a ScriptBreakdown object (version and
+        requirements) from a model. Does not create or modify a timeline.
+        """
+        result = require_project(project)
+        return _success(script_service.analyze_script(result.project_path, script,
+            provider=script_provider, breakdown=breakdown))
+
+    @server.tool(structured_output=True)
+    @_guard
+    def get_script_breakdown(project: str) -> dict[str, Any]:
+        """Read validated scene requirements without invoking a script analyzer."""
+        result = require_project(project)
+        return _success(script_service.get_script_breakdown(result.project_path))
 
     return server
 

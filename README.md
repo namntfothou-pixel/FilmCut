@@ -249,7 +249,7 @@ Run the standalone official-SDK client test from the repository root:
 ```
 
 It launches a real server process, performs initialization and tool discovery,
-calls all twenty-seven tools, tests recovery after project and argument errors, and
+calls all twenty-nine tools, tests recovery after project and argument errors, and
 renders synthetic media through MCP. Its temporary project storage is isolated
 using `FILMCUT_PROJECTS_ROOT` and `FILMCUT_SFX_LIBRARY`; real projects and the
 local asset catalog are untouched. On Linux use
@@ -700,3 +700,54 @@ Mocked tests cover the contract, Unicode persistence, unavailable providers,
 invalid model responses, source lookups, atomic write failures, unchanged
 project/media files, and MCP error recovery. The stdio smoke test also saves
 and retrieves supplied mock observations.
+
+## Script breakdown
+
+`analyze_script(project, script, breakdown=None)` accepts script **text**, then
+saves `projects/<project>/analysis/script_breakdown.json` as readable UTF-8 JSON.
+`get_script_breakdown(project)` reads and validates it. Both MCP tools use the
+script service; they never create or change a timeline, source index, or media.
+A successful rerun atomically replaces the prior breakdown. Invalid input,
+provider failures, and failed saves preserve the prior file.
+
+The document contains `version: "1.0"` and an ordered `requirements` list.
+Each `SceneRequirement` has `scene_id`, `story_order`, `characters`, `location`,
+`action`, `emotion`, `dialogue`, `preferred_shot_size`,
+`continuity_requirements`, `estimated_duration`, and `notes`. Characters,
+continuity requirements, and notes are string lists. Unknown textual fields are
+null. Durations are positive finite seconds. Scene IDs must be unique and
+story order must be consecutive, starting at 1.
+
+The offline parser supports `INT.`/`EXT.` screenplay headings and numbered
+`SCENE`, `SHOT`, or `CẢNH` headings. Each heading starts one requirement, in
+script order, with a stable positional ID such as `scene_001`. Scene and shot
+headings are flat: use one heading per intended requirement rather than nested
+scene/shot headings. Speaker names can be uppercase cues on their own lines or
+`NAME: dialogue`. Separate action after dialogue with a blank line. Explicit
+English field labels are supported: `Characters` (comma-separated), `Location`,
+`Action`, `Emotion`, `Dialogue`, `Shot size` / `Preferred shot size`,
+`Continuity` / `Continuity requirements`, `Duration` / `Estimated duration`,
+and `Notes`. Field values can contain Vietnamese or other Unicode text.
+
+This parser extracts formatting and explicit text; it does not infer unspoken
+emotions or identify characters from action prose. Untagged prose outside
+speaker blocks becomes action. Parenthetical delivery directions and screenplay
+transitions are retained as notes. Unheaded free-form prose returns a useful
+format error. A duration label accepts seconds (e.g. `Duration: 12 seconds`);
+otherwise a rough reading estimate is recorded with its formula in notes for
+review. This estimate is advisory and does not schedule clips.
+
+The runnable example is `tests/fixtures/short_drama.txt`, a two-scene drama with
+English action and Vietnamese dialogue. It exercises explicit and estimated
+duration, continuity, shot preference, and dialogue extraction.
+
+For semantic interpretation of arbitrary scripts, implement
+`analysis.script_provider.ScriptAnalysisProvider.analyze(script)` returning a
+`ScriptBreakdown` or compatible dictionary. Pass it to
+`build_server(script_provider=...)` or
+`services.script_service.analyze_script(..., provider=...)`. Adapters own model
+selection and timeouts. An MCP client can also supply a model-produced
+`breakdown` dictionary alongside the original script, using the same validation
+and persistence path. `ScriptBreakdown.model_json_schema()` exposes the contract.
+No provider or model is loaded by default. Script input is limited to one
+million characters; no file paths are implicitly opened as script text.
