@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "items": [
+    {
+      "id": "impact_concrete_03",
+      "file": "audio/impact_concrete_03.wav",
+      "tags": ["impact", "body", "wall", "concrete", "heavy"],
+      "description": "Example catalog entry; supply your own licensed sound file."
+    }
+  ]
+}
