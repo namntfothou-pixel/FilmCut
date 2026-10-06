@@ -1,0 +1,127 @@
+"""Local FilmCut FastMCP stdio adapter; stdout is reserved for MCP messages."""
+
+import logging
+import os
+from functools import wraps
+from pathlib import Path
+from typing import Any
+
+from mcp.server.fastmcp import FastMCP
+
+from engine import media, render, timeline
+from services import project_service
+
+logger = logging.getLogger("filmcut.mcp")
+
+
+class ToolFailure(Exception):
+    def __init__(self, error):
+        super().__init__(error["message"])
+        self.error = error
+
+    def to_dict(self):
+        return self.error
+
+
+def _success(data):
+    return {"success": True, "data": data, "error": None}
+
+
+def _guard(function):
+    """Contain project failures, including unexpected service exceptions."""
+    @wraps(function)
+    def guarded(*args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        except Exception as exc:
+            if callable(getattr(exc, "to_dict", None)):
+                error = exc.to_dict()
+            else:
+                logger.exception("FilmCut tool %s failed", function.__name__)
+                error = {"code": "internal_error", "message": f"{function.__name__} failed: {exc}"}
+            return {"success": False, "data": None, "error": error}
+    return guarded
+
+
+def build_server(projects_root: Path | None = None) -> FastMCP:
+    """Allow an isolated project root for tests, using the same existing services."""
+    server = FastMCP("FilmCut", log_level="WARNING", instructions=(
+        "Local video editing engine. Project arguments are project names. "
+        "timeline.json is the source of truth. create_timeline never resets an existing timeline."
+    ))
+
+    def require_project(name):
+        result = project_service.get_project(name, projects_root=projects_root)
+        if not result.success:
+            raise ToolFailure(result.error.model_dump(mode="json"))
+        return result
+
+    @server.tool(structured_output=True)
+    @_guard
+    def ping() -> dict[str, Any]:
+        """Check FilmCut MCP connectivity."""
+        return _success({"server": "FilmCut", "transport": "stdio", "status": "ok"})
+
+    @server.tool(structured_output=True)
+    @_guard
+    def create_project(name: str, source_folder: str) -> dict[str, Any]:
+        """Create a project without overwriting existing projects or source media."""
+        result = project_service.create_project(name, source_folder, projects_root=projects_root)
+        if not result.success:
+            raise ToolFailure(result.error.model_dump(mode="json"))
+        return _success({"project": result.project.model_dump(mode="json"), "project_path": str(result.project_path)})
+
+    @server.tool(structured_output=True)
+    @_guard
+    def get_project(name: str) -> dict[str, Any]:
+        """Read project metadata by project name."""
+        result = require_project(name)
+        return _success({"project": result.project.model_dump(mode="json"), "project_path": str(result.project_path)})
+
+    @server.tool(structured_output=True)
+    @_guard
+    def analyze_folder(project: str) -> dict[str, Any]:
+        """Analyze a project's configured source folder and save its source index."""
+        result = require_project(project)
+        scan = media.scan_folder(result.project.source_folder)
+        path = media.write_source_index(result.project_path, scan)
+        return _success({**scan, "complete": not scan["errors"], "source_index_path": str(path)})
+
+    @server.tool(structured_output=True)
+    @_guard
+    def get_timeline(project: str) -> dict[str, Any]:
+        """Load and validate the project's saved editing intent."""
+        result = require_project(project)
+        saved = timeline.load_timeline(result.project_path)
+        return _success({"timeline": saved.model_dump(mode="json")})
+
+    @server.tool(structured_output=True)
+    @_guard
+    def create_timeline(project: str) -> dict[str, Any]:
+        """Initialize a missing timeline; preserve and return an existing timeline."""
+        result = require_project(project)
+        path = result.project_path / "timeline.json"
+        if path.exists() or path.is_symlink():
+            saved = timeline.load_timeline(result.project_path)
+            created = False
+        else:
+            saved = timeline.create_empty_timeline(result.project)
+            timeline.save_timeline(result.project_path, saved)
+            created = True
+        return _success({"timeline": saved.model_dump(mode="json"), "created": created})
+
+    @server.tool(structured_output=True)
+    @_guard
+    def render_preview(project: str) -> dict[str, Any]:
+        """Render the saved video timeline into preview/preview.mp4."""
+        result = require_project(project)
+        path = render.render_timeline(result.project_path)
+        return _success({"preview_path": str(path), "metadata": media.probe_media(path)})
+
+    return server
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.WARNING)  # Logging goes to stderr.
+    root = os.environ.get("FILMCUT_PROJECTS_ROOT")
+    build_server(Path(root) if root else None).run(transport="stdio")
