@@ -25,7 +25,7 @@ TOOLS = {"ping", "create_project", "get_project", "analyze_folder", "get_timelin
          "set_j_cut", "set_l_cut", "reset_audio_offset", "analyze_source", "get_source_analysis",
          "analyze_script", "get_script_breakdown", "find_candidates_for_scene", "rank_sources_for_script", "build_rough_cut",
          "plan_music", "apply_music_plan", "plan_sfx", "apply_sfx_plan", "plan_edit_refinement", "apply_edit_refinement",
-         "auto_edit_project"}
+         "auto_edit_project", "qc_project", "export_final"}
 
 
 async def run_smoke_test(configuration=None):
@@ -221,6 +221,13 @@ async def run_smoke_test(configuration=None):
                 assert not planned_refinement["data"]["plan"]["decisions"]  # A single shot has no boundary.
                 refined = await call("apply_edit_refinement", {"project": "Smoke"})
                 assert not refined["data"]["changed"]
+                qc = await call("qc_project", {"project": "Smoke"})
+                assert qc["data"]["passed"], qc["data"]["errors"]
+                exported = await call("export_final", {"project": "Smoke"})
+                final_path = project / "output" / "Smoke_FINAL.mp4"
+                assert Path(exported["data"]["export_path"]) == final_path and final_path.is_file()
+                assert exported["data"]["metadata"]["video_codec"] == "h264"
+                assert exported["data"]["metadata"]["audio_codec"] == "aac"
                 malformed = await session.call_tool("get_project", {})
                 assert malformed.isError  # SDK argument validation error, process stays alive.
                 await call("ping")
@@ -228,7 +235,8 @@ async def run_smoke_test(configuration=None):
                         "project_error_recovery": "PASS", "preview_render": "PASS", "timeline_editing": "PASS",
                         "music_mixing": "PASS", "sfx_mixing": "PASS", "sfx_library": "PASS",
                         "subtitle_error_recovery": "PASS", "transitions": "PASS", "audio_offsets": "PASS", "rough_cut": "PASS",
-                        "sound_director": "PASS", "edit_refinement": "PASS", "auto_edit_error_recovery": "PASS"}
+                        "sound_director": "PASS", "edit_refinement": "PASS", "auto_edit_error_recovery": "PASS",
+                        "qc": "PASS", "final_export": "PASS"}
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@
 8. Run tests after every implementation phase.
 9. Do not build a GUI yet.
 10. Automatic rough cuts are allowed through explicit `build_rough_cut` or `auto_edit_project` requests, with validated sources, timeline history, an edit-decision report, and a preview.
+11. Final exports require a passing saved QC report unless the user explicitly sets `force=true`.
 
 Use Python 3.11+ and the repository-local `.venv`. Keep dependencies inside
 that virtual environment. Keep source media unchanged and generated files out
@@ -22,8 +23,8 @@ references, and optional plain preview burn-in are implemented. Cut, crossfade,
 and fade-to-black transitions with synchronized A/V overlap are implemented.
 J-cuts and L-cuts use independent source-audio fields, never visual transition
 types. Offset dialogue replaces embedded audio and is mixed once per enabled
-clip; preserve video frame timing. Do not add flashy transitions. Final exports are not
-implemented. Whisper defaults to multilingual tiny on
+clip; preserve video frame timing. Do not add flashy transitions. Final export
+is explicit and QC-gated. Whisper defaults to multilingual tiny on
 CPU/int8, loads only on transcription requests, and supports a local model path.
 Do not download large models by default or add advanced subtitle styling.
 Sound Director may propose existing local audio assets and apply saved plans
@@ -47,3 +48,6 @@ High-level orchestration delegates to existing services. An explicit
 Sound Director plan/apply steps; retain inspectable plans and stage snapshots.
 Record stage failures and block dependent stages. Never silently invent semantic
 analysis, skip missing sound assets/transcription, or export final automatically.
+QC and final export are explicit user requests. `export_final` must render and
+verify H.264/AAC before atomically publishing to `output/`; retain the QC report
+and keep preview/export artifacts separate.

@@ -206,7 +206,8 @@ cached MP4 files for reuse; successful returned files are intentionally retained
 Temporary intermediates use isolated subdirectories in the project's cache and
 are cleaned on success or failure. Only this run's files are removed; unrelated
 cache files and prior previews are preserved on failure. A preview cannot replace
-its own source media. Final exports remain separate and are not implemented.
+its own source media. Final exports remain separate from previews and require
+explicit QC-gated export.
 
 `engine/ffmpeg.py` provides argument-vector execution, aspect normalization,
 encoding settings, and concatenation of prepared files. Every subprocess uses
@@ -1125,11 +1126,41 @@ is available, and the server stays alive.
 The rough-cut service renders an intermediate preview. The top-level
 `preview_path` is returned only after stage 12 renders and ffprobe validates
 `preview/preview.mp4`. **No final export is performed**, and `output/` is left
-untouched. Final export requires an explicit user request and a separate
-implementation; it is not currently implemented.
+untouched. Final export requires an explicit user request through `export_final`.
 
 Tests inject a semantic provider and transcription test double while running
 real FFmpeg dialogue extraction, sound mixing, SRT generation, rough-cut and
 final preview rendering. They verify all twelve failure boundaries, persisted
 reports, history/reuse, source integrity, and MCP recovery. Real Whisper model
 inference is not claimed by these tests.
+
+## Final quality check and export
+
+`qc_project(project)` validates timeline JSON and media references, probes the
+source streams, checks subtitle timing and out-of-range cues, renders a fresh
+preview, and checks its codecs, audio stream/peak, black intervals, frame size,
+frame rate, and duration. It writes a human-readable and machine-readable
+`projects/<project>/qc_report.json` and returns every check with pass/fail/skip
+status, details, errors, warnings, timeline fingerprint, and inspected preview.
+It checks that the timeline stayed unchanged while the preview was rendered.
+Video inputs without their own dialogue audio are reported as a warning when
+other dialogue or sound is present. A program with no audible audio source fails QC.
+Black bars added for aspect-ratio preservation do not count as black scenes;
+black intervals during configured `fade_to_black` transitions are expected.
+The current checker flags other full-frame black intervals for review.
+
+`export_final(project, force=false)` runs QC and blocks if any check fails.
+Passing output is copied from the freshly checked preview to
+`projects/<project>/output/<project>_FINAL.mp4`, then ffprobe verifies H.264,
+AAC, project resolution/FPS, and timeline duration. Export copies only after
+checking that timeline and preview did not change after QC, then installs the
+file atomically. A repeated explicit export replaces the previous final file.
+Set `force=true` only to bypass QC findings; the timeline still must render and
+the final file must pass codec and output-format validation. Peaks at or above
+-0.1 dBFS fail the clipping check and block export by default.
+
+The MCP tools are `qc_project(project)` and `export_final(project, force=false)`.
+Both return structured JSON results; failed export returns the QC report path
+and findings. The standalone MCP smoke test runs a complete synthetic QC and
+final export. Focused tests cover missing/corrupt media, black frames, subtitle
+overruns, FPS mismatches, QC gating/force, ffprobe metadata, and MCP invocation.

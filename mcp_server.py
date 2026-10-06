@@ -17,6 +17,7 @@ from services import rough_cut_service
 from services import sound_service
 from services import refinement_service
 from services import orchestration_service
+from services import qc_service
 from analysis.provider import AnalysisProvider, SuppliedAnalysisProvider
 from analysis.script_provider import ScriptAnalysisProvider
 
@@ -168,6 +169,20 @@ def build_server(projects_root: Path | None = None, sfx_library_root: Path | Non
         result = require_project(project)
         path = render.render_timeline(result.project_path, burn_subtitles=burn_subtitles)
         return _success({"preview_path": str(path), "metadata": media.probe_media(path)})
+
+    @server.tool(structured_output=True)
+    @_guard
+    def qc_project(project: str) -> dict[str, Any]:
+        """Run timeline, media, subtitle, black-frame, audio-peak and output QC; save qc_report.json."""
+        result = require_project(project)
+        return _success(qc_service.qc_project(result.project_path))
+
+    @server.tool(structured_output=True)
+    @_guard
+    def export_final(project: str, force: bool = False) -> dict[str, Any]:
+        """QC and export H.264/AAC MP4. QC must pass unless force is true."""
+        result = require_project(project)
+        return _success(qc_service.export_final(result.project_path, force=force))
 
     @server.tool(structured_output=True)
     @_guard
