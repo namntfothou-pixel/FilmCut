@@ -16,6 +16,7 @@ from services import matching_service
 from services import rough_cut_service
 from services import sound_service
 from services import refinement_service
+from services import orchestration_service
 from analysis.provider import AnalysisProvider, SuppliedAnalysisProvider
 from analysis.script_provider import ScriptAnalysisProvider
 
@@ -66,6 +67,22 @@ def build_server(projects_root: Path | None = None, sfx_library_root: Path | Non
         if not result.success:
             raise ToolFailure(result.error.model_dump(mode="json"))
         return result
+
+    @server.tool(structured_output=True)
+    @_guard
+    def auto_edit_project(project: str) -> dict[str, Any]:
+        """Run analysis through a subtitled preview with stage reports; never export final.
+
+        Uses saved semantic analysis or the injected provider, script.txt or a
+        saved breakdown, tagged local sound libraries, and configured Whisper.
+        Calling this authorizes conservative default refinement and timeline edits.
+        Failure preserves completed work and identifies blocked downstream stages.
+        """
+        result = require_project(project)
+        report = orchestration_service.auto_edit_project(result.project_path,
+            analysis_provider=analysis_provider, script_provider=script_provider,
+            music_library_root=music_library_root, sfx_library_root=sfx_library_root)
+        return {"success": report["success"], "data": report, "error": report["error"]}
 
     @server.tool(structured_output=True)
     @_guard

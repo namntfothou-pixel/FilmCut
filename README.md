@@ -1061,3 +1061,75 @@ J-cut, and L-cut. They verify duration/codec output with ffprobe, compare all
 video frame hashes for J/L edits, preserve source hashes, and check history,
 stale plans, disabled decisions, sparse budgets, insufficient audio handles,
 and protection of timed sound. The stdio smoke test exercises both MCP tools.
+
+## Auto-edit orchestration
+
+`auto_edit_project(project)` runs the existing services in this order:
+source analysis (only missing observations), script analysis, source ranking,
+rough cut, refinement planning/application, music planning/application,
+SFX planning/application, subtitle generation, then preview rendering.
+The MCP argument is the project name. The Python service accepts a project path
+and optional injected analysis/script providers and local sound library roots.
+No deterministic rendering logic is duplicated or changed.
+
+Supply UTF-8 `script.txt` in the project directory, or configure a script path
+with `auto_edit.json`. An existing `analysis/script_breakdown.json` can also
+serve as structured script input; it is revalidated through the script service.
+An explicitly configured missing script path fails instead of silently using
+an older breakdown. Optional settings (unknown fields are rejected):
+
+```json
+{
+  "script_file": "D:\\Film\\Test01\\script.txt",
+  "language": "vi"
+}
+```
+
+Defaults are project-relative `script.txt` and English (`en`); Vietnamese (`vi`)
+is supported. Relative configured paths resolve against the project directory.
+For missing source observations, inject an `AnalysisProvider` when building
+the server/service. The default stdio server has no semantic model configured:
+first supply observations with `analyze_source` if using it without a provider.
+Saved valid analyses are reused; invalid saved analyses produce a stage error.
+An empty/missing index is scanned through the media analyzer. Corrupt videos
+are retained as scan warnings; valid indexed videos remain usable.
+
+Music/SFX require matching tagged files in the existing local catalogs. An
+unresolved sound decision fails application rather than silently omitting it.
+Subtitle generation uses the configured faster-whisper model, defaulting to
+multilingual tiny. Set `FILMCUT_WHISPER_MODEL` to a prepared local model path
+for offline use. No model is downloaded during orchestration tests.
+
+Calling auto-edit authorizes the saved conservative default refinement plan
+and the sound plan/apply steps. Plans remain inspectable as artifacts. To review
+or apply a custom approved refinement before proceeding, use the separate
+`plan_edit_refinement` / `apply_edit_refinement` tools instead of this automatic
+default workflow. Auto-edit rebuilds picture from the script; existing timeline
+versions remain in history. It is not a resume command for manual edits.
+
+Each result contains twelve stages with `status`, `logs`, `artifacts`, `errors`,
+timestamps, and structured lower-level results. Failed stages stop the run;
+later stages are `blocked`, and `failed_stage` identifies the cause. Completed
+changes and artifacts remain available, with existing timeline backups. Retry
+starts a new run from the beginning. Do not manually edit the project during a
+workflow. A per-project lock rejects concurrent auto-edit calls; after a killed
+process, inspect the run report before removing a stale `.auto-edit.lock`.
+
+Reports are checkpointed to `analysis/auto_edit_report.json` and unique
+`analysis/workflow_runs/<run_id>.json`. Each completed stage also has an immutable
+result snapshot there, preserving plans that shared files may later overwrite.
+Journal write failures are reported as `workflow_report_failed`. MCP failures
+return `success: false` with the full stage report in `data` whenever journaling
+is available, and the server stays alive.
+
+The rough-cut service renders an intermediate preview. The top-level
+`preview_path` is returned only after stage 12 renders and ffprobe validates
+`preview/preview.mp4`. **No final export is performed**, and `output/` is left
+untouched. Final export requires an explicit user request and a separate
+implementation; it is not currently implemented.
+
+Tests inject a semantic provider and transcription test double while running
+real FFmpeg dialogue extraction, sound mixing, SRT generation, rough-cut and
+final preview rendering. They verify all twelve failure boundaries, persisted
+reports, history/reuse, source integrity, and MCP recovery. Real Whisper model
+inference is not claimed by these tests.

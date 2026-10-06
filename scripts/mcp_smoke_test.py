@@ -24,7 +24,8 @@ TOOLS = {"ping", "create_project", "get_project", "analyze_folder", "get_timelin
          "list_sfx_library", "search_sfx_by_tags", "generate_subtitles", "set_transition",
          "set_j_cut", "set_l_cut", "reset_audio_offset", "analyze_source", "get_source_analysis",
          "analyze_script", "get_script_breakdown", "find_candidates_for_scene", "rank_sources_for_script", "build_rough_cut",
-         "plan_music", "apply_music_plan", "plan_sfx", "apply_sfx_plan", "plan_edit_refinement", "apply_edit_refinement"}
+         "plan_music", "apply_music_plan", "plan_sfx", "apply_sfx_plan", "plan_edit_refinement", "apply_edit_refinement",
+         "auto_edit_project"}
 
 
 async def run_smoke_test(configuration=None):
@@ -76,6 +77,14 @@ async def run_smoke_test(configuration=None):
                         assert payload["error"]["code"] and payload["error"]["message"], payload
                     return payload
 
+                await call("ping")
+                await call("create_project", {"name": "AutoMissingAnalysis", "source_folder": str(source)})
+                workflow = await call("auto_edit_project", {"project": "AutoMissingAnalysis"}, success=False)
+                assert workflow["data"]["failed_stage"] == "analyze_sources"
+                assert workflow["error"]["code"] == "analysis_provider_not_configured"
+                assert len(workflow["data"]["stages"]) == 12
+                assert all(s["status"] == "blocked" for s in workflow["data"]["stages"][1:])
+                assert Path(workflow["data"]["report_path"]).is_file()
                 await call("ping")
                 await call("get_project", {"name": "Missing"}, success=False)
                 await call("create_project", {"name": "../invalid", "source_folder": str(source)}, success=False)
@@ -219,7 +228,7 @@ async def run_smoke_test(configuration=None):
                         "project_error_recovery": "PASS", "preview_render": "PASS", "timeline_editing": "PASS",
                         "music_mixing": "PASS", "sfx_mixing": "PASS", "sfx_library": "PASS",
                         "subtitle_error_recovery": "PASS", "transitions": "PASS", "audio_offsets": "PASS", "rough_cut": "PASS",
-                        "sound_director": "PASS", "edit_refinement": "PASS"}
+                        "sound_director": "PASS", "edit_refinement": "PASS", "auto_edit_error_recovery": "PASS"}
 
 
 if __name__ == "__main__":

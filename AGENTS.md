@@ -9,7 +9,7 @@
 7. Every feature must have error handling.
 8. Run tests after every implementation phase.
 9. Do not build a GUI yet.
-10. Automatic rough cuts are allowed only through the explicit `build_rough_cut` workflow, with validated sources, timeline history, an edit-decision report, and a preview.
+10. Automatic rough cuts are allowed through explicit `build_rough_cut` or `auto_edit_project` requests, with validated sources, timeline history, an edit-decision report, and a preview.
 
 Use Python 3.11+ and the repository-local `.venv`. Keep dependencies inside
 that virtual environment. Keep source media unchanged and generated files out
@@ -41,3 +41,9 @@ add music or SFX; separate Sound Director apply operations may add them.
 Refinement plans remain inspectable before application. Keep hard cuts as the
 default, preserve manual edits, and never represent J/L cuts as visual effects.
 Do not shift existing timed audio/subtitles silently when adding overlap.
+
+High-level orchestration delegates to existing services. An explicit
+`auto_edit_project` request authorizes the conservative default refinement and
+Sound Director plan/apply steps; retain inspectable plans and stage snapshots.
+Record stage failures and block dependent stages. Never silently invent semantic
+analysis, skip missing sound assets/transcription, or export final automatically.
